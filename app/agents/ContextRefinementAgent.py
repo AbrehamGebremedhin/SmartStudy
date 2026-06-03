@@ -1,43 +1,41 @@
 import os
 import json
 import logging
-from datetime import datetime
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional
 from dataclasses import dataclass
 from functools import lru_cache
 from tenacity import retry, stop_after_attempt, wait_exponential
 from dotenv import load_dotenv
-from langchain_core.output_parsers import JsonOutputParser
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.prompts import PromptTemplate
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from RetrievalAgent import RetrievalAgent  # Fixed the class name here
+from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
+from langchain_core.documents import Document
+from langchain_deepseek import ChatDeepSeek
+from langchain_core.prompts import PromptTemplate
+from RetrievalAgent import RetrievalAgent
 import tiktoken
-from dataclasses import dataclass
 
-# Set up logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
+
+def _format_docs(context) -> str:
+    if isinstance(context, list):
+        return "\n\n".join(
+            doc.page_content if isinstance(doc, Document) else str(doc)
+            for doc in context
+        )
+    return str(context)
+
+
 @dataclass
 class RefinementResponse:
-    """
-    Structured response class for context refinement results.
-    
-    Attributes:
-        context (str): The refined context text
-        parsed_answer (Dict[str, Any]): Structured parsing of the context
-        summary (Dict[str, Any]): Summary of key points
-        error (Optional[str]): Error message if processing failed
-        token_usage (Optional[str]): Token usage information
-    """
-    context: str
+    context: object  # List[Document] or str
     parsed_answer: Dict[str, Any]
     summary: Dict[str, Any]
     error: Optional[str] = None
     token_usage: Optional[str] = None
+
 
 @dataclass
 class TokenCount:
@@ -48,60 +46,32 @@ class TokenCount:
     def __str__(self):
         return f"Input tokens: {self.input_tokens}\nOutput tokens: {self.output_tokens}\nTotal tokens: {self.input_tokens + self.output_tokens}\nEstimated cost: ${self.total_cost:.4f}"
 
+
 class ContextRefinementError(Exception):
-    """Custom exception for ContextRefinementAgent errors."""
     pass
 
+
 class ContextRefinementAgent:
-    """
-    A class responsible for refining and structuring educational context.
-    
-    This agent processes raw educational content into structured formats,
-    extracts key information, and provides summaries suitable for different
-    educational content types.
-
-    Attributes:
-        logger: Logging instance for tracking operations
-        llm: Instance of ChatGoogleGenerativeAI
-        retrieval_agent: Instance of RetrievalAgent
-        parser: JSON output parser for structured responses
-    """
-
     def __init__(self):
-        """Initialize the ContextRefinementAgent with configuration and logging"""
-        load_dotenv("./config.env")
+        load_dotenv("./.env")
         self.logger = logging.getLogger(__name__)
-        
-        api_key = os.getenv("GOOGLE_API_KEY")
+
+        api_key = os.getenv("DEEPSEEK_API_KEY")
         if not api_key:
-            raise ContextRefinementError("GOOGLE_API_KEY not found in environment")
-        
-        os.environ["GOOGLE_API_KEY"] = api_key
-        
+            raise ContextRefinementError("DEEPSEEK_API_KEY not found in environment")
+
         try:
-            self.llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash")
-            self.retrieval_agent = RetrievalAgent()  # Fixed the class name here
+            self.llm = ChatDeepSeek(model="deepseek-chat", api_key=api_key)
+            self.retrieval_agent = RetrievalAgent()
             self.parser = JsonOutputParser()
             self.token_counter = tiktoken.encoding_for_model("gpt-3.5-turbo")
             self.token_counts = []
-            self.COST_PER_1M_INPUT = 0.27   # $0.27 per 1M input tokens
-            self.COST_PER_1M_OUTPUT = 1.10  # $1.10 per 1M output tokens
+            self.COST_PER_1M_INPUT = 0.27
+            self.COST_PER_1M_OUTPUT = 1.10
         except Exception as e:
             raise ContextRefinementError(f"Failed to initialize services: {str(e)}")
 
     def validate_inputs(self, subject: str, question: str, grade: Optional[int] = None, unit: Optional[str] = None) -> None:
-        """
-        Validate input parameters for content refinement.
-
-        Args:
-            subject (str): Subject area
-            question (str): Query or prompt
-            grade (Optional[int]): Grade level
-            unit (Optional[str]): Unit identifier
-
-        Raises:
-            ValueError: If inputs fail validation
-        """
         if not all([subject, question]):
             raise ValueError("Subject and question must not be empty")
         if grade is not None and (not isinstance(grade, int) or grade < 1 or grade > 12):
@@ -109,43 +79,22 @@ class ContextRefinementAgent:
         if not isinstance(subject, str) or not isinstance(question, str):
             raise ValueError("Subject and question must be strings")
 
+    def _run_chain(self, prompt: PromptTemplate, inputs: dict) -> str:
+        if "context" in inputs:
+            inputs = {**inputs, "context": _format_docs(inputs["context"])}
+        chain = prompt | self.llm | StrOutputParser()
+        return chain.invoke(inputs)
+
     @lru_cache(maxsize=128)
     def get_prompt(self, type_request: str) -> PromptTemplate:
-        """
-        Get cached prompt template based on request type.
-
-        Retrieves and returns a specific prompt template optimized for different
-        types of educational content generation. Uses caching to improve performance.
-
-        Args:
-            type_request (str): Type of content being generated. Can be:
-                - "chat": For interactive Q&A responses
-                - "notes": For comprehensive study notes
-                - "quiz": For MCQs and flashcards (default template)
-
-        Returns:
-            PromptTemplate: Template customized for the specified request type
-
-        Notes:
-            - Implements LRU caching for performance optimization
-            - Different templates for different content types
-            - Includes specific instructions per content type
-            - Enforces consistent JSON response format
-            - Optimized for educational content generation
-
-        Cache Info:
-            - Uses @lru_cache with maxsize=128
-            - Caches based on type_request parameter
-            - Improves response time for repeated requests
-        """
         if type_request == "chat":
             prompt_template = """
                 <|system|> You are an expert in extracting key points from educational content to assist in learning. Your task is to analyze the provided context and the student's question in the subject of {subject}, and then identify key points that address the student's query and provide additional helpful information.
 
                 IMPORTANT: Your response must be formatted as a single-line JSON string with no line breaks or escaped characters, like this: {{"keypoints":["Point 1", "Point 2"]}}
 
-                Context:  
-                {context}  
+                Context:
+                {context}
 
                 Student Question:
                 {student_question}
@@ -153,7 +102,7 @@ class ContextRefinementAgent:
                 Subject: {subject}
 
                 Instructions:
-                1. Identify key points that answer the student’s question directly.
+                1. Identify key points that answer the student's question directly.
                 2. Include relevant additional information from the context that enhances understanding.
                 3. Do not add any information not explicitly found in the context.
                 4. Avoid repeating similar points; ensure clarity and uniqueness.
@@ -163,7 +112,6 @@ class ContextRefinementAgent:
                 - Use double quotes for all keys and values.
                 - Return ONLY the JSON string with no extra text or line breaks.
                 - Ensure the JSON is properly escaped and valid.
-
             """
         elif type_request == "notes":
             prompt_template = """
@@ -171,8 +119,8 @@ class ContextRefinementAgent:
 
                 IMPORTANT: Your response must be formatted as a single-line JSON string with no line breaks or escaped characters, like this: {{"sections": ["Section 1", "Section 2"], "key_concepts": ["Concept 1", "Concept 2"], "relationships": ["Relationship 1", "Relationship 2"], "learning_objectives": ["Objective 1", "Objective 2"]}}
 
-                Context:  
-                {context}  
+                Context:
+                {context}
 
                 Student Question: {student_question}
                 Subject: {subject}
@@ -195,8 +143,8 @@ class ContextRefinementAgent:
 
                 IMPORTANT: Your response must be formatted as a single-line JSON string with no line breaks or escaped characters, like this: {{"areas":["Area", "Area"]}}
 
-                Context:  
-                {context}  
+                Context:
+                {context}
 
                 Subject: {subject}
 
@@ -211,27 +159,15 @@ class ContextRefinementAgent:
                 - Use double quotes for all keys and values.
                 - Return ONLY the JSON string with no extra text or line breaks.
                 - Ensure the JSON is properly escaped and valid.
-
             """
-        
+
         return PromptTemplate.from_template(prompt_template)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-    def summarize_content(self, context: str, max_length: int = 500, include_structure: bool = False) -> Dict[str, Any]:
-        """
-        Create structured summary of educational content.
-
-        Args:
-            context (str): Content to summarize
-            max_length (int): Maximum length of detailed summary
-            include_structure (bool): Include structural elements
-
-        Returns:
-            Dict[str, Any]: Structured summary with key points
-        """
+    def summarize_content(self, context, max_length: int = 500, include_structure: bool = False) -> Dict[str, Any]:
         base_prompt = """
             You are an expert educational content summarizer. Analyze the provided context and create a structured summary.
-            
+
             IMPORTANT: Your response must be formatted as a single-line JSON string with no line breaks or escaped characters, like this:
             {{"brief_summary": "Short 1-2 sentence overview",
               "key_points": ["Point 1", "Point 2", "Point 3"],
@@ -264,18 +200,12 @@ class ContextRefinementAgent:
             """
 
         prompt = PromptTemplate.from_template(base_prompt)
-        chain = create_stuff_documents_chain(llm=self.llm, prompt=prompt)
 
         try:
-            answer = chain.invoke({
-                "context": context,
-                "max_length": max_length
-            })
-
+            answer = self._run_chain(prompt, {"context": context, "max_length": max_length})
             clean_answer = str(answer.strip()).replace("\\", '')
             parsed_answer = self.parser.parse(clean_answer)
 
-            # Validate required fields
             required_fields = ['brief_summary', 'key_points', 'main_ideas', 'detailed_summary']
             if not all(field in parsed_answer for field in required_fields):
                 raise ValueError("Missing required fields in summary response")
@@ -291,15 +221,12 @@ class ContextRefinementAgent:
         return len(self.token_counter.encode(str(text)))
 
     def record_token_usage(self, input_text: str, output_text: str) -> TokenCount:
-        """Record token usage for input and output"""
         input_tokens = self.count_tokens(input_text)
         output_tokens = self.count_tokens(output_text)
-        
         cost = (
-            (input_tokens * self.COST_PER_1M_INPUT / 1000000) +
-            (output_tokens * self.COST_PER_1M_OUTPUT / 1000000)
+            (input_tokens * self.COST_PER_1M_INPUT / 1_000_000) +
+            (output_tokens * self.COST_PER_1M_OUTPUT / 1_000_000)
         )
-        
         token_count = TokenCount(input_tokens, output_tokens, cost)
         self.token_counts.append(token_count)
         return token_count
@@ -311,44 +238,19 @@ class ContextRefinementAgent:
         return TokenCount(total_input, total_output, total_cost)
 
     def query_db(self, subject: str, question: str, grade: Optional[int] = None, unit: Optional[str] = None, type_req: str = "chat") -> RefinementResponse:
-        """
-        Query database and refine context for educational content generation.
-
-        Args:
-            subject (str): Subject area
-            question (str): Query or prompt
-            grade (Optional[int]): Grade level
-            unit (Optional[str]): Unit identifier
-            type_req (str): Type of content being generated
-
-        Returns:
-            RefinementResponse: Structured response with refined context
-        """
         try:
-            # Validate inputs
             self.validate_inputs(subject, question, grade, unit)
-            
-            # Log query attempt
             self.logger.info(f"Processing query - Subject: {subject}, Question: {question}")
 
-            # Modify context retrieval for notes
             if type_req == "notes":
-                # Get broader context for comprehensive notes
                 context = self.retrieval_agent.query_vector_store(
-                    subject, 
-                    question, 
-                    grade, 
-                    unit,
-                    "notes",
-                    k_multiplier=1.25  # Adjusted to a more conservative value
+                    subject, question, grade, unit, "notes", k_multiplier=1.25
                 )
+            elif type_req == "chat":
+                context = self.retrieval_agent.query_vector_store(subject, question, None, None, type_req)
             else:
-                # Get context without grade and unit for chat queries
-                if type_req == "chat":
-                    context = self.retrieval_agent.query_vector_store(subject, question, None, None, type_req)
-                else:
-                    context = self.retrieval_agent.query_vector_store(subject, question, grade, unit, type_req)
-                
+                context = self.retrieval_agent.query_vector_store(subject, question, grade, unit, type_req)
+
             if not context:
                 return RefinementResponse(
                     context="",
@@ -357,33 +259,23 @@ class ContextRefinementAgent:
                     error="No relevant documents found"
                 )
 
-            # Get and execute chain
             prompt = self.get_prompt(type_req)
-            chain = create_stuff_documents_chain(llm=self.llm, prompt=prompt)
-            
-            answer = chain.invoke({
+            answer = self._run_chain(prompt, {
                 "context": context,
                 "student_question": question,
                 "subject": subject,
             })
 
-            # Enhanced summary for notes
             if type_req == "notes":
-                summary = self.summarize_content(
-                    context,
-                    max_length=1000,  # Longer summary for notes
-                    include_structure=True  # Add structural elements
-                )
+                summary = self.summarize_content(context, max_length=1000, include_structure=True)
             else:
                 summary = self.summarize_content(context)
 
-            # Parse response
             clean_answer = str(answer.strip()).replace("\\", '')
             parsed_answer = self.parser.parse(clean_answer)
 
-            # Record token usage
             token_usage = self.record_token_usage(
-                f"{context}\n{question}\n{subject}",
+                f"{_format_docs(context)}\n{question}\n{subject}",
                 str(parsed_answer)
             )
 
@@ -393,22 +285,12 @@ class ContextRefinementAgent:
                 parsed_answer=parsed_answer,
                 summary=summary,
                 error=None,
-                token_usage=str(token_usage)  # Add token usage to response
+                token_usage=str(token_usage)
             )
 
         except ValueError as e:
             self.logger.error(f"Validation error: {str(e)}")
-            return RefinementResponse(
-                context="",
-                parsed_answer={},
-                summary={},
-                error=f"Validation error: {str(e)}"
-            )
+            return RefinementResponse(context="", parsed_answer={}, summary={}, error=f"Validation error: {str(e)}")
         except Exception as e:
             self.logger.error(f"Error processing query: {str(e)}")
-            return RefinementResponse(
-                context="",
-                parsed_answer={},
-                summary={},
-                error=f"Processing error: {str(e)}"
-            )
+            return RefinementResponse(context="", parsed_answer={}, summary={}, error=f"Processing error: {str(e)}")

@@ -1,29 +1,29 @@
 import os
 import functools
-from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from dotenv import load_dotenv
-from langchain_astradb import AstraDBVectorStore
-from astrapy.info import CollectionVectorServiceOptions
-from langchain_core.output_parsers import JsonOutputParser
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.chains.question_answering import load_qa_chain
-from langchain.prompts import PromptTemplate
-from typing import List, Dict, Any
-from astrapy.core.api import APIRequestError
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from RetrievalAgent import RetrievalAgent  # Fixed typo in class name
+from langchain_deepseek import ChatDeepSeek
+from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
+from langchain_core.prompts import PromptTemplate
+from langchain_core.documents import Document
+from RetrievalAgent import RetrievalAgent
 import json
 import logging
 from ContextRefinementAgent import ContextRefinementAgent
-from ValidationAgent import ValidationAgent  # Add this import
-from langchain.schema import Document
+from ValidationAgent import ValidationAgent
 from datetime import datetime
 import uuid
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
-from datetime import datetime
 import tiktoken
+
+
+def _format_docs(context) -> str:
+    if isinstance(context, list):
+        return "\n\n".join(
+            doc.page_content if isinstance(doc, Document) else str(doc)
+            for doc in context
+        )
+    return str(context)
 
 @dataclass
 class ChatMessage:
@@ -50,9 +50,7 @@ class ChatSession:
         recent = self.messages[-max_messages:] if self.messages else []
         return "\n".join([f"{msg.role}: {msg.content}" for msg in recent])
 
-load_dotenv("./config.env")
-
-# os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY")
+load_dotenv("./.env")
 
 def retry_on_none(max_retries=3):
     """
@@ -113,16 +111,14 @@ class GenerationAgent:
 
     def __init__(self):
         """Initialize the GenerationAgent with required components"""
-        load_dotenv("./config.env")
+        load_dotenv("./.env")
         self.logger = logging.getLogger(__name__)
-        
-        api_key = os.getenv("GOOGLE_API_KEY")
+
+        api_key = os.getenv("DEEPSEEK_API_KEY")
         if not api_key:
-            raise ValueError("GOOGLE_API_KEY not found in environment")
-            
-        os.environ["GOOGLE_API_KEY"] = api_key
-        
-        self.llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash")
+            raise ValueError("DEEPSEEK_API_KEY not found in environment")
+
+        self.llm = ChatDeepSeek(model="deepseek-chat", api_key=api_key)
         self.context_agent = ContextRefinementAgent()
         self.validation_agent = ValidationAgent()
         self.stem_subjects = ["maths", "physics", "chemistry", "biology", "economics"]
@@ -130,8 +126,8 @@ class GenerationAgent:
         self.active_sessions: Dict[str, ChatSession] = {}
         self.token_counter = tiktoken.encoding_for_model("gpt-3.5-turbo")
         self.token_counts = []
-        self.COST_PER_1M_INPUT = 0.55   # $0.27 per 1M input tokens
-        self.COST_PER_1M_OUTPUT = 2.19   # $1.10 per 1M output tokens
+        self.COST_PER_1M_INPUT = 0.27   # DeepSeek-V3: $0.27 per 1M input tokens
+        self.COST_PER_1M_OUTPUT = 1.10  # DeepSeek-V3: $1.10 per 1M output tokens
 
     def count_tokens(self, text: str) -> int:
         """Count tokens in a text string"""
@@ -443,11 +439,10 @@ class GenerationAgent:
                 5. Questions match the {difficulty} difficulty level appropriately
             """)
 
-            chain = create_stuff_documents_chain(llm=self.llm, prompt=prompt)
-            
-            # Pass difficulty in the chain invocation
+            chain = prompt | self.llm | StrOutputParser()
+
             response = chain.invoke({
-                "context": context_response.context,
+                "context": _format_docs(context_response.context),
                 "areas": context_response.parsed_answer.get("areas", []),
                 "num_questions": num_questions,
                 "subject_rules": subject_rules,
@@ -467,7 +462,7 @@ class GenerationAgent:
             if validation_result["needs_replacement"]:
                 replacement_count = len(validation_result["invalid_indices"])
                 additional_response = chain.invoke({
-                    "context": context_response.context,
+                    "context": _format_docs(context_response.context),
                     "areas": context_response.parsed_answer.get("areas", []),
                     "num_questions": replacement_count,
                     "subject_rules": subject_rules,
@@ -480,9 +475,8 @@ class GenerationAgent:
             else:
                 valid_questions = validation_result["valid_mcqs"]
 
-            # Record token usage for this operation
             self.record_token_usage(
-                f"{context_response.context}\n{subject_rules}\n{difficulty}",
+                f"{_format_docs(context_response.context)}\n{subject_rules}\n{difficulty}",
                 str(parsed_response)
             )
 
@@ -584,10 +578,10 @@ class GenerationAgent:
                 4. Cards match the {difficulty} difficulty level appropriately
             """)
 
-            chain = create_stuff_documents_chain(llm=self.llm, prompt=prompt)
-            
+            chain = prompt | self.llm | StrOutputParser()
+
             response = chain.invoke({
-                "context": context_response.context,
+                "context": _format_docs(context_response.context),
                 "areas": context_response.parsed_answer.get("areas", []),
                 "num_cards": num_cards,
                 "difficulty": difficulty
@@ -606,7 +600,7 @@ class GenerationAgent:
             if validation_result["needs_replacement"]:
                 replacement_count = len(validation_result["invalid_indices"])
                 additional_response = chain.invoke({
-                    "context": context_response.context,
+                    "context": _format_docs(context_response.context),
                     "areas": context_response.parsed_answer.get("areas", []),
                     "num_cards": replacement_count,
                     "difficulty": difficulty
@@ -621,9 +615,8 @@ class GenerationAgent:
             # Get subject-specific rules before recording token usage
             subject_rules = self._get_subject_rules(subject)
             
-            # Record token usage for this operation
             self.record_token_usage(
-                f"{context_response.context}\n{subject_rules}\n{difficulty}",
+                f"{_format_docs(context_response.context)}\n{subject_rules}\n{difficulty}",
                 str(parsed_response)
             )
 
@@ -704,10 +697,10 @@ class GenerationAgent:
                 }}
             """)
 
-            chain = create_stuff_documents_chain(llm=self.llm, prompt=prompt)
-            
+            chain = prompt | self.llm | StrOutputParser()
+
             response = chain.invoke({
-                "context": context_response.context,
+                "context": _format_docs(context_response.context),
                 "question": question,
                 "keypoints": context_response.parsed_answer.get("keypoints", []),
                 "chat_history": chat_history,
@@ -731,13 +724,11 @@ class GenerationAgent:
             # Get subject-specific rules before recording token usage
             subject_rules = self._get_subject_rules(subject)
             
-            # Record token usage for this operation
             self.record_token_usage(
-                f"{context_response.context}\n{subject_rules}",
+                f"{_format_docs(context_response.context)}\n{subject_rules}",
                 str(parsed_response)
             )
 
-            # Return simplified response structure
             return {
                 "title": session.title,
                 "content": {
@@ -909,10 +900,10 @@ class GenerationAgent:
                 5. Include both basic and advanced content where appropriate
             """)
 
-            chain = create_stuff_documents_chain(llm=self.llm, prompt=prompt)
-            
+            chain = prompt | self.llm | StrOutputParser()
+
             response = chain.invoke({
-                "context": context_response.context,
+                "context": _format_docs(context_response.context),
                 "topic": topic,
                 "rules": self._get_subject_rules(subject)
             })
@@ -939,9 +930,8 @@ class GenerationAgent:
                 "version": "2.0"
             }
 
-            # Record token usage for this operation
             self.record_token_usage(
-                f"{context_response.context}\n{subject_rules}",
+                f"{_format_docs(context_response.context)}\n{subject_rules}",
                 str(parsed_response)
             )
 
@@ -1022,15 +1012,14 @@ class GenerationAgent:
                 5. Maintain proper JSON format
             """)
 
-            chain = create_stuff_documents_chain(llm=self.llm, prompt=prompt)
-            
-            # Execute chain
+            chain = prompt | self.llm | StrOutputParser()
+
             response = chain.invoke({
                 "subject": subject,
                 "question": question["question"],
                 "solution_approach": question.get("solution_approach", ""),
                 "student_answer": student_answer,
-                "context": context_response.context
+                "context": _format_docs(context_response.context)
             })
 
             # Parse response with enhanced error handling
@@ -1079,7 +1068,7 @@ class GenerationAgent:
 
                 # Record token usage for this operation
                 self.record_token_usage(
-                    f"{context_response.context}\n{subject_rules}",
+                    f"{_format_docs(context_response.context)}\n{subject_rules}",
                     str(parsed_response)
                 )
 
@@ -1112,23 +1101,22 @@ if __name__ == "__main__":
     agent = GenerationAgent()
     
     # Generate MCQs
-    mcqs = agent.generate_mcqs(
-        subject="history",
-        grade=9,
-        unit="3",
-        num_questions=10
-    )
-    print("MCQs:", json.dumps(mcqs, indent=2))
-
-    # notes = agent.generate_notes(
+    # mcqs = agent.generate_mcqs(
     #     subject="history",
-    #     topic="Major Factors for the Rise of the Aksumite Kingdom",
     #     grade=9,
-    #     unit="3"
+    #     unit="3",
+    #     num_questions=10
     # )
+    # print("MCQs:", json.dumps(mcqs, indent=2))
 
-    # print("Notes:", json.dumps(notes, indent=2))
-    
+    notes = agent.generate_notes(
+        subject="history",
+        topic="Major Factors for the Rise of the Aksumite Kingdom",
+        grade=9,
+        unit="3"
+    )
+    print("Notes:", json.dumps(notes, indent=2))
+
     # # Generate Flashcards
     # flashcards = agent.generate_flashcards(
     #     subject="chemistry",
@@ -1148,25 +1136,23 @@ if __name__ == "__main__":
 
     # # Test chat functionality
     # session_id = agent.create_chat_session("maths", "Math Help")
-    
-    # # Ask multiple questions in the same session
+
     # questions = [
     #     "Can you explain what a quadratic equation is?",
     # ]
-    
+
     # for question in questions:
     #     response = agent.chat_response("maths", question, session_id)
     #     print("Response: ", response)
 
-        
-    # Test answer evaluation
+    # # Test answer evaluation
     # practice_question = {
     #     "question": "Solve the quadratic equation: x^2 - 5x + 6 = 0",
     #     "solution_approach": "Use factoring or quadratic formula to find x = 2 and x = 3"
     # }
-    
+
     # student_answer = "x = 2 or x = 3"
-    
+
     # evaluation = agent.evaluate_practice_answer(
     #     subject="maths",
     #     question=practice_question,

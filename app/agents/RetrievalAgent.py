@@ -1,51 +1,25 @@
-import os
 import logging
-from typing import List, Dict, Optional
-from functools import lru_cache
+from typing import List, Optional
 from time import sleep
-from dotenv import load_dotenv
-from langchain_astradb import AstraDBVectorStore
-from astrapy.info import CollectionVectorServiceOptions
+from langchain_core.documents import Document
+from langchain_ollama import OllamaEmbeddings
+from pymilvus import MilvusClient
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+COLLECTION_NAME = "smartstudy"
+MILVUS_URI = "http://localhost:19530"
+
+
 class RetrievalAgentError(Exception):
-    """Custom exception for handling RetrievalAgent-specific errors."""
     pass
 
+
 class RetrievalAgent:
-    """
-    A class responsible for retrieving relevant educational content from vector databases.
-    
-    This agent handles sophisticated content retrieval operations, including context-aware
-    searching, grade-appropriate content filtering, and subject-specific optimizations.
-    It includes robust error handling and retry mechanisms for database operations.
-
-    Attributes:
-        MAX_RETRIES (int): Maximum number of retry attempts for database operations
-        RETRY_DELAY (int): Delay in seconds between retry attempts
-        VALID_COMBINATIONS (Dict): Mapping of valid grade-subject-unit combinations
-        application_token (str): Token for AstraDB authentication
-        endpoint (str): AstraDB API endpoint
-        nvidia_vectorize_options (CollectionVectorServiceOptions): Vector service configuration
-
-    Methods:
-        query_vector_store: Main method for retrieving relevant content
-        calculate_k: Determines optimal number of results to retrieve
-        get_vector_store: Manages vector store connections with caching
-
-    Notes:
-        - Uses AstraDB for vector storage and retrieval
-        - Implements caching for improved performance
-        - Handles subject-specific content retrieval rules
-    """
-
     MAX_RETRIES = 3
-    RETRY_DELAY = 1  # seconds
-    
-    # Add valid combinations mapping
+    RETRY_DELAY = 1
+
     VALID_COMBINATIONS = {
         12: {
             'biology': 6, 'chemistry': 5, 'civics': 10, 'economics': 8,
@@ -69,140 +43,28 @@ class RetrievalAgent:
         }
     }
 
-    def __init__(self):
-        """Initialize the RetrievalAgent with configuration and vector store settings."""
-        self._load_config()
-        self._initialize_vector_options()
-        
-    def _load_config(self) -> None:
-        """Load and validate environment configuration."""
-        load_dotenv("./config.env")
-        self.application_token = os.getenv("ASTRA_DB_APPLICATION_TOKEN")
-        self.endpoint = os.getenv("COMBINED_SUBJECTS_ASTRA_DB_API_ENDPOINT")
-        
-        if not self.application_token or not self.endpoint:
-            raise RetrievalAgentError("Missing required environment variables")
+    KNOWN_SUBJECTS = {
+        "biology", "chemistry", "civics", "economics", "english",
+        "general_business", "geography", "history", "maths", "physics", "sat"
+    }
 
-    def _initialize_vector_options(self) -> None:
-        """Initialize vector store options and configuration."""
-        self.nvidia_vectorize_options = CollectionVectorServiceOptions(
-            provider="nvidia",
-            model_name="NV-Embed-QA",
+    def __init__(self, milvus_uri: str = MILVUS_URI):
+        self.client = MilvusClient(uri=milvus_uri)
+        self.embeddings = OllamaEmbeddings(
+            model="nomic-embed-text",
+            base_url="http://localhost:11434",
         )
-        
-        self.no_records = {
-            "biology": 10075,
-            "chemistry": 13085,
-            "civics": 9190,
-            "economics": 15585,
-            "english": 23055,
-            "general_business": 6570,
-            "geography": 11581,
-            "history": 13855,
-            "maths": 13771,
-            "physics": 9484,
-            "sat": 14870
-        }
 
-    def _normalize_subject(self, subject: str) -> str:
-        """
-        Normalize subject name to standard format for database operations.
-
-        Converts subject names to a standardized format used in the vector database.
-        Handles case normalization and adds required prefixes.
-
-        Args:
-            subject (str): Raw subject name input
-
-        Returns:
-            str: Normalized subject name in uppercase with COMBINED_ prefix
-
-        Examples:
-            >>> _normalize_subject("math")
-            "COMBINED_MATH"
-            >>> _normalize_subject("General Science")
-            "COMBINED_GENERAL_SCIENCE"
-        """
-        subject = subject.lower().strip()
-        return f"COMBINED_{subject.upper()}"
-
-    @lru_cache(maxsize=32)
-    def get_vector_store(self, subject: str) -> AstraDBVectorStore:
-        """
-        Get or create a cached vector store instance for a subject.
-
-        Args:
-            subject (str): The normalized subject name
-
-        Returns:
-            AstraDBVectorStore: Vector store instance for the subject
-
-        Raises:
-            RetrievalAgentError: If vector store initialization fails
-        """
-        try:
-            return AstraDBVectorStore(
-                collection_name=subject,
-                api_endpoint=self.endpoint,
-                token=self.application_token,
-                collection_vector_service_options=self.nvidia_vectorize_options,
-            )
-        except Exception as e:
-            logger.error(f"Failed to initialize vector store for {subject}: {e}")
-            raise RetrievalAgentError(f"Vector store initialization failed: {e}")
-
-    def calculate_k(self, subject: str) -> int:
-        """
-        Calculate optimal number of results to retrieve based on subject records.
-
-        Determines the appropriate number of results to fetch from the vector store
-        based on the total number of records available for a subject and other
-        optimization factors.
-
-        Args:
-            subject (str): Normalized subject name
-
-        Returns:
-            int: Optimal number of results to retrieve
-
-        Notes:
-            - Adjusts result count based on subject-specific characteristics
-            - Uses predefined thresholds for different record count ranges
-            - Optimized for educational content retrieval
-        """
-        subject_key = subject.replace('COMBINED_', '').lower()
-        total_records = self.no_records.get(subject_key, 10000)
-        
-        if total_records < 7000:
-            return 35
-        elif total_records < 12000:
-            return 45
-        elif total_records < 16000:
-            return 55
-        return 60
+    def _validate_subject_exists(self, subject: str) -> None:
+        if subject not in self.KNOWN_SUBJECTS:
+            raise ValueError(f"Subject '{subject}' does not exist in the records")
 
     def _validate_request(self, subject: str, grade: Optional[int], unit: Optional[str]) -> None:
-        """
-        Validate if the subject, grade and unit combination is valid.
-        
-        Args:
-            subject (str): Subject name
-            grade (Optional[int]): Grade level
-            unit (Optional[str]): Unit number
-
-        Raises:
-            ValueError: If the combination is invalid
-        """
-        if subject.startswith('COMBINED_'):
-            subject = subject[9:].lower()
-
         if grade is not None:
             if grade not in self.VALID_COMBINATIONS:
                 raise ValueError(f"Invalid grade: {grade}. Must be between 9-12")
-            
             if subject not in self.VALID_COMBINATIONS[grade]:
                 raise ValueError(f"Invalid subject '{subject}' for grade {grade}")
-            
             if unit is not None:
                 try:
                     unit_num = int(unit)
@@ -217,83 +79,68 @@ class RetrievalAgent:
                         raise ValueError("Unit must be a number")
                     raise
 
-    def _validate_subject_exists(self, subject: str) -> None:
-        """
-        Validate if the subject exists in the predefined records.
+    def _build_filter(self, subject: str, grade: Optional[int], unit: Optional[str], type_req: str) -> str:
+        parts = [f'subject == "{subject}"']
+        if type_req not in ("chat",) and subject not in ("sat", "english"):
+            if grade is not None:
+                parts.append(f'grade == "{grade}"')
+            if unit is not None:
+                parts.append(f'unit == "{unit}"')
+        return " and ".join(parts)
 
-        Args:
-            subject (str): Normalized subject name
+    def _calculate_k(self, type_req: str, k_multiplier: float) -> int:
+        base = 45
+        if type_req == "notes":
+            base = 60
+        return int(base * k_multiplier)
 
-        Raises:
-            ValueError: If the subject does not exist
-        """
-        subject_key = subject.replace('COMBINED_', '').lower()
-        if subject_key not in self.no_records:
-            raise ValueError(f"Subject '{subject_key}' does not exist in the records")
-
-    def query_vector_store(self, subject: str, question: str, grade: Optional[int] = None, 
-                         unit: Optional[str] = None, type_req: str = "chat",
-                         k_multiplier: float = 1.0) -> List:
-        """
-        Query the vector store for relevant educational content with advanced filtering.
-
-        Performs sophisticated content retrieval with support for various content types,
-        grade levels, and subject-specific optimizations. Includes retry logic and
-        error handling for robust operation.
-
-        Args:
-            subject (str): Subject area to query
-            question (str): The query question or prompt
-            grade (Optional[int]): Grade level for content filtering
-            unit (Optional[str]): Unit/chapter identifier
-            type_req (str): Type of request ("chat", "mcq", "notes")
-            k_multiplier (float): Multiplier for number of results to retrieve
-
-        Returns:
-            List: List of relevant documents from the vector store
-
-        Raises:
-            RetrievalAgentError: If query fails after maximum retries
-            ValueError: If question is empty or inputs are invalid
-
-        Notes:
-            - Implements automatic retry logic for failed queries
-            - Optimizes result count based on request type and subject
-            - Filters results based on grade level and unit when applicable
-        """
+    def query_vector_store(
+        self,
+        subject: str,
+        question: str,
+        grade: Optional[int] = None,
+        unit: Optional[str] = None,
+        type_req: str = "chat",
+        k_multiplier: float = 1.0,
+    ) -> List[Document]:
         if not question.strip():
             raise ValueError("Question cannot be empty")
 
-        subject = self._normalize_subject(subject)
-        
-        # Validate subject existence
+        subject = subject.lower().strip()
         self._validate_subject_exists(subject)
-        
-        # Add validation for non-chat requests
-        if type_req != "chat" and subject.lower() not in ["combined_sat", "combined_english"]:
+
+        if type_req != "chat" and subject not in ("sat", "english"):
             self._validate_request(subject, grade, unit)
 
         for attempt in range(self.MAX_RETRIES):
             try:
-                vector_store = self.get_vector_store(subject=subject)
-                # Apply multiplier to base k value
-                k = int(self.calculate_k(subject) * k_multiplier)
-                
-                filter_params = {"subject": subject}
-                if type_req != "chat" and subject.lower() not in ["combined_sat", "combined_english"]:
-                    filter_params.update({
-                        "unit": unit,
-                        "grade": grade
-                    })
+                query_vector = self.embeddings.embed_query(question)
+                k = self._calculate_k(type_req, k_multiplier)
+                expr = self._build_filter(subject, grade, unit, type_req)
 
-                results = vector_store.similarity_search_with_score(
-                    question,
-                    k=k,
-                    filter=filter_params if filter_params else None
+                results = self.client.search(
+                    collection_name=COLLECTION_NAME,
+                    data=[query_vector],
+                    limit=k,
+                    filter=expr,
+                    output_fields=["text", "grade", "subject", "unit", "source"],
+                    search_params={"nprobe": 128},  # exhaustive search across all IVF clusters
                 )
-                
-                documents = [doc for doc, _ in results]
-                logger.info(f"Successfully retrieved {len(documents)} documents for {subject}")
+
+                documents = [
+                    Document(
+                        page_content=hit["entity"]["text"],
+                        metadata={
+                            "grade": hit["entity"].get("grade", ""),
+                            "subject": hit["entity"].get("subject", ""),
+                            "unit": hit["entity"].get("unit", ""),
+                            "source": hit["entity"].get("source", ""),
+                        },
+                    )
+                    for hit in results[0]
+                ]
+
+                logger.info(f"Retrieved {len(documents)} documents for subject={subject}")
                 return documents
 
             except Exception as e:
@@ -301,4 +148,6 @@ class RetrievalAgent:
                 if attempt < self.MAX_RETRIES - 1:
                     sleep(self.RETRY_DELAY)
                 else:
-                    raise RetrievalAgentError(f"Failed to query vector store after {self.MAX_RETRIES} attempts: {e}")
+                    raise RetrievalAgentError(
+                        f"Failed to query Milvus after {self.MAX_RETRIES} attempts: {e}"
+                    )
