@@ -67,9 +67,8 @@ class ContextRefinementAgent:
             # NOTE: tiktoken's gpt-3.5-turbo encoding is an APPROXIMATION for DeepSeek, which
             # uses a different tokenizer. Token counts and cost estimates are indicative only.
             self.token_counter = tiktoken.encoding_for_model("gpt-3.5-turbo")
-            self.token_counts = []
-            self.COST_PER_1M_INPUT = 0.27
-            self.COST_PER_1M_OUTPUT = 1.10
+            self.COST_PER_1M_INPUT = 0.14   # DeepSeek-V4-Flash
+            self.COST_PER_1M_OUTPUT = 0.28  # DeepSeek-V4-Flash
         except Exception as e:
             raise ContextRefinementError(f"Failed to initialize services: {str(e)}")
 
@@ -226,21 +225,14 @@ class ContextRefinementAgent:
         return len(self.token_counter.encode(str(text)))
 
     def record_token_usage(self, input_text: str, output_text: str) -> TokenCount:
+        """Return per-call token usage; does not accumulate across requests."""
         input_tokens = self.count_tokens(input_text)
         output_tokens = self.count_tokens(output_text)
         cost = (
             (input_tokens * self.COST_PER_1M_INPUT / 1_000_000) +
             (output_tokens * self.COST_PER_1M_OUTPUT / 1_000_000)
         )
-        token_count = TokenCount(input_tokens, output_tokens, cost)
-        self.token_counts.append(token_count)
-        return token_count
-
-    def get_total_token_usage(self) -> TokenCount:
-        total_input = sum(tc.input_tokens for tc in self.token_counts)
-        total_output = sum(tc.output_tokens for tc in self.token_counts)
-        total_cost = sum(tc.total_cost for tc in self.token_counts)
-        return TokenCount(total_input, total_output, total_cost)
+        return TokenCount(input_tokens, output_tokens, cost)
 
     def query_db(self, subject: str, question: str, grade: Optional[int] = None, unit: Optional[str] = None, type_req: str = "chat") -> RefinementResponse:
         try:

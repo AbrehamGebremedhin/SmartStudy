@@ -42,29 +42,21 @@ class ValidationAgent:
         # NOTE: tiktoken's gpt-3.5-turbo encoding is an APPROXIMATION for DeepSeek, which
         # uses a different tokenizer. Token counts and cost estimates are indicative only.
         self.token_counter = tiktoken.encoding_for_model("gpt-3.5-turbo")
-        self.token_counts = []
-        self.COST_PER_1M_INPUT = 0.27
-        self.COST_PER_1M_OUTPUT = 1.10
+        self.COST_PER_1M_INPUT = 0.14   # DeepSeek-V4-Flash
+        self.COST_PER_1M_OUTPUT = 0.28  # DeepSeek-V4-Flash
 
     def count_tokens(self, text: str) -> int:
         return len(self.token_counter.encode(str(text)))
 
     def record_token_usage(self, input_text: str, output_text: str) -> TokenCount:
+        """Return per-call token usage; does not accumulate across requests."""
         input_tokens = self.count_tokens(input_text)
         output_tokens = self.count_tokens(output_text)
         cost = (
             (input_tokens * self.COST_PER_1M_INPUT / 1_000_000) +
             (output_tokens * self.COST_PER_1M_OUTPUT / 1_000_000)
         )
-        token_count = TokenCount(input_tokens, output_tokens, cost)
-        self.token_counts.append(token_count)
-        return token_count
-
-    def get_total_token_usage(self) -> TokenCount:
-        total_input = sum(tc.input_tokens for tc in self.token_counts)
-        total_output = sum(tc.output_tokens for tc in self.token_counts)
-        total_cost = sum(tc.total_cost for tc in self.token_counts)
-        return TokenCount(total_input, total_output, total_cost)
+        return TokenCount(input_tokens, output_tokens, cost)
 
     def _run_chain(self, prompt: PromptTemplate, inputs: dict) -> str:
         if "context" in inputs:
@@ -74,9 +66,10 @@ class ValidationAgent:
         return chain.invoke(inputs)
 
     def validate_mcqs(self, mcqs: List[Dict], context, areas: List[str]) -> Dict[str, Any]:
+        _zero = TokenCount(0, 0, 0.0)
         if not mcqs:
             return {"valid_mcqs": [], "invalid_indices": [], "needs_replacement": False,
-                    "token_usage": str(self.get_total_token_usage())}
+                    "token_usage": str(_zero)}
 
         # --- structural checks (no API call) ---
         struct_invalid: set = set()
@@ -105,7 +98,7 @@ class ValidationAgent:
                 "valid_mcqs": [],
                 "invalid_indices": list(struct_invalid),
                 "needs_replacement": True,
-                "token_usage": str(self.get_total_token_usage()),
+                "token_usage": str(_zero),
             }
 
         # --- single batch LLM call for remaining candidates ---
@@ -127,6 +120,7 @@ class ValidationAgent:
             Include one entry per question using the original index numbers shown above.
         """)
         llm_invalid: set = set()
+        token_usage = _zero
         try:
             response = self._run_chain(prompt, {
                 "context": context,
@@ -137,7 +131,7 @@ class ValidationAgent:
             for entry in parsed.get("results", []):
                 if not entry.get("is_valid", True):
                     llm_invalid.add(int(entry["index"]))
-            self.record_token_usage(numbered, str(parsed))
+            token_usage = self.record_token_usage(numbered, str(parsed))
         except Exception:
             pass  # on batch failure keep all candidates as valid
 
@@ -146,13 +140,14 @@ class ValidationAgent:
             "valid_mcqs": [mcq for i, mcq in enumerate(mcqs) if i not in invalid_indices],
             "invalid_indices": invalid_indices,
             "needs_replacement": len(invalid_indices) > 0,
-            "token_usage": str(self.get_total_token_usage()),
+            "token_usage": str(token_usage),
         }
 
     def validate_flashcards(self, flashcards: List[Dict], context, areas: List[str]) -> Dict[str, Any]:
+        _zero = TokenCount(0, 0, 0.0)
         if not flashcards:
             return {"valid_flashcards": [], "invalid_indices": [], "needs_replacement": False,
-                    "token_usage": str(self.get_total_token_usage())}
+                    "token_usage": str(_zero)}
 
         # --- structural checks (no API call) ---
         struct_invalid: set = set()
@@ -170,7 +165,7 @@ class ValidationAgent:
                 "valid_flashcards": [],
                 "invalid_indices": list(struct_invalid),
                 "needs_replacement": True,
-                "token_usage": str(self.get_total_token_usage()),
+                "token_usage": str(_zero),
             }
 
         # --- single batch LLM call for remaining candidates ---
@@ -192,6 +187,7 @@ class ValidationAgent:
             Include one entry per card using the original index numbers shown above.
         """)
         llm_invalid: set = set()
+        token_usage = _zero
         try:
             response = self._run_chain(prompt, {
                 "context": context,
@@ -202,7 +198,7 @@ class ValidationAgent:
             for entry in parsed.get("results", []):
                 if not entry.get("is_valid", True):
                     llm_invalid.add(int(entry["index"]))
-            self.record_token_usage(numbered, str(parsed))
+            token_usage = self.record_token_usage(numbered, str(parsed))
         except Exception:
             pass  # on batch failure keep all candidates as valid
 
@@ -211,17 +207,18 @@ class ValidationAgent:
             "valid_flashcards": [card for i, card in enumerate(flashcards) if i not in invalid_indices],
             "invalid_indices": invalid_indices,
             "needs_replacement": len(invalid_indices) > 0,
-            "token_usage": str(self.get_total_token_usage()),
+            "token_usage": str(token_usage),
         }
 
     def validate_chat_response(self, response: Dict, context, keypoints: List[str]) -> Dict[str, Any]:
+        _zero = TokenCount(0, 0, 0.0)
         if isinstance(response, dict):
             if "error" in response:
                 return {
                     "is_valid": False,
                     "reason": response["error"],
                     "needs_regeneration": True,
-                    "token_usage": str(self.get_total_token_usage())
+                    "token_usage": str(_zero)
                 }
             if "response" in response:
                 if isinstance(response["response"], dict):
@@ -238,7 +235,7 @@ class ValidationAgent:
                 "is_valid": False,
                 "reason": "Empty response",
                 "needs_regeneration": True,
-                "token_usage": str(self.get_total_token_usage())
+                "token_usage": str(_zero)
             }
 
         prompt = PromptTemplate.from_template("""
@@ -262,7 +259,7 @@ class ValidationAgent:
                 "response": response_text,
             })
             validation = json.loads(str(validation_response))
-            self.record_token_usage(
+            token_usage = self.record_token_usage(
                 f"{_format_docs(context)}\n{response_text}\n{str(keypoints)}",
                 str(validation)
             )
@@ -271,17 +268,18 @@ class ValidationAgent:
                 "is_valid": is_valid,
                 "reason": validation.get("reason", ""),
                 "needs_regeneration": not is_valid,
-                "token_usage": str(self.get_total_token_usage())
+                "token_usage": str(token_usage)
             }
         except Exception:
             return {
                 "is_valid": True,
                 "reason": "Validation parsing failed - assuming valid",
                 "needs_regeneration": False,
-                "token_usage": str(self.get_total_token_usage())
+                "token_usage": str(_zero)
             }
 
     def validate_notes(self, notes: Dict[str, Any], context) -> Dict[str, Any]:
+        _zero = TokenCount(0, 0, 0.0)
         prompt = PromptTemplate.from_template("""
             Validate these educational notes based on the following criteria:
             1. Content accuracy matches context
@@ -301,7 +299,7 @@ class ValidationAgent:
                 "notes": json.dumps(notes),
             })
             validation = json.loads(str(response))
-            self.record_token_usage(
+            token_usage = self.record_token_usage(
                 f"{_format_docs(context)}\n{json.dumps(notes)}",
                 str(validation)
             )
@@ -312,12 +310,12 @@ class ValidationAgent:
                 "is_valid": is_valid,
                 "reason": validation.get("reason", ""),
                 "needs_regeneration": not is_valid,
-                "token_usage": str(self.get_total_token_usage())
+                "token_usage": str(token_usage)
             }
         except Exception:
             return {
                 "is_valid": True,
                 "reason": "Validation parsing failed - assuming valid",
                 "needs_regeneration": False,
-                "token_usage": str(self.get_total_token_usage())
+                "token_usage": str(_zero)
             }

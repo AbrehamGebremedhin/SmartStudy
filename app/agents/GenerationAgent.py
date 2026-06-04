@@ -2,6 +2,7 @@ import os
 import functools
 import random
 import time
+import threading
 from typing import Dict, Any, Optional, List
 from dotenv import load_dotenv
 from langchain_deepseek import ChatDeepSeek
@@ -151,66 +152,59 @@ class GenerationAgent:
         self.stem_subjects = ["maths", "physics", "chemistry", "biology", "economics"]
         self.humanities_subjects = ["english", "history", "geography", "civics", "general_business"]
         self.active_sessions: Dict[str, ChatSession] = {}
+        self._sessions_lock = threading.Lock()
         # Sessions older than this are dropped on the next create to bound memory growth
         self.session_ttl_hours = float(os.getenv("CHAT_SESSION_TTL_HOURS", "24"))
         # NOTE: tiktoken's gpt-3.5-turbo encoding is an APPROXIMATION for DeepSeek, which
         # uses a different tokenizer. Token counts and cost estimates are indicative only.
         self.token_counter = tiktoken.encoding_for_model("gpt-3.5-turbo")
-        self.token_counts = []
-        self.COST_PER_1M_INPUT = 0.27   # DeepSeek-V3: $0.27 per 1M input tokens
-        self.COST_PER_1M_OUTPUT = 1.10  # DeepSeek-V3: $1.10 per 1M output tokens
+        self.COST_PER_1M_INPUT = 0.14   # DeepSeek-V4-Flash
+        self.COST_PER_1M_OUTPUT = 0.28  # DeepSeek-V4-Flash
 
     def count_tokens(self, text: str) -> int:
         """Count tokens in a text string"""
         return len(self.token_counter.encode(str(text)))
 
     def record_token_usage(self, input_text: str, output_text: str) -> TokenCount:
-        """Record token usage for input and output"""
+        """Return per-call token usage; does not accumulate across requests."""
         input_tokens = self.count_tokens(input_text)
         output_tokens = self.count_tokens(output_text)
-        
         cost = (
-            (input_tokens * self.COST_PER_1M_INPUT / 1000000) +
-            (output_tokens * self.COST_PER_1M_OUTPUT / 1000000)
+            (input_tokens * self.COST_PER_1M_INPUT / 1_000_000) +
+            (output_tokens * self.COST_PER_1M_OUTPUT / 1_000_000)
         )
-        
-        token_count = TokenCount(input_tokens, output_tokens, cost)
-        self.token_counts.append(token_count)
-        return token_count
-
-    def get_total_token_usage(self) -> TokenCount:
-        """Get total token usage across all operations"""
-        total_input = sum(tc.input_tokens for tc in self.token_counts)
-        total_output = sum(tc.output_tokens for tc in self.token_counts)
-        total_cost = sum(tc.total_cost for tc in self.token_counts)
-        return TokenCount(total_input, total_output, total_cost)
+        return TokenCount(input_tokens, output_tokens, cost)
 
     def _cleanup_expired_sessions(self) -> None:
         """Drop sessions older than the configured TTL to bound memory growth."""
         if self.session_ttl_hours <= 0:
             return
         cutoff = datetime.now() - timedelta(hours=self.session_ttl_hours)
-        expired = [sid for sid, s in self.active_sessions.items() if s.created_at < cutoff]
-        for sid in expired:
-            del self.active_sessions[sid]
+        with self._sessions_lock:
+            expired = [sid for sid, s in self.active_sessions.items() if s.created_at < cutoff]
+            for sid in expired:
+                del self.active_sessions[sid]
 
     def create_chat_session(self, subject: str, initial_title: str = "New Chat",
                              grade: Optional[int] = None) -> str:
         """Create a new chat session and return its ID"""
         self._cleanup_expired_sessions()
         session = ChatSession(subject=subject, title=initial_title, grade=grade)
-        self.active_sessions[session.id] = session
+        with self._sessions_lock:
+            self.active_sessions[session.id] = session
         return session.id
-        
+
     def get_chat_session(self, session_id: str) -> Optional[ChatSession]:
         """Retrieve a chat session by ID"""
-        return self.active_sessions.get(session_id)
-        
+        with self._sessions_lock:
+            return self.active_sessions.get(session_id)
+
     def update_session_title(self, session_id: str, new_title: str) -> bool:
         """Update the title of a chat session"""
-        if session := self.active_sessions.get(session_id):
-            session.title = new_title
-            return True
+        with self._sessions_lock:
+            if session := self.active_sessions.get(session_id):
+                session.title = new_title
+                return True
         return False
 
     def _get_subject_rules(self, subject: str) -> str:
@@ -450,6 +444,7 @@ class GenerationAgent:
         Returns:
             Dict[str, Any]: Generated MCQs with validation results
         """
+        token_usage = TokenCount(0, 0, 0.0)
         try:
             # Validate difficulty level
             if difficulty not in ["easy", "medium", "hard", "challenging"]:
@@ -588,7 +583,7 @@ class GenerationAgent:
                 if not ws or str(ws).strip().upper() in ("N/A", "NA", "NONE", "-", "NOT APPLICABLE", "NULL"):
                     q["workout_steps"] = None
 
-            self.record_token_usage(
+            token_usage = self.record_token_usage(
                 f"{_format_docs(context_response.context)}\n{subject_rules}\n{difficulty}",
                 str(parsed_response)
             )
@@ -597,7 +592,7 @@ class GenerationAgent:
                 "questions": valid_questions[:num_questions],
                 "error": None,
                 "difficulty": difficulty,
-                "token_usage": str(self.get_total_token_usage())
+                "token_usage": str(token_usage)
             }
 
         except Exception as e:
@@ -605,7 +600,7 @@ class GenerationAgent:
             return {
                 "error": f"MCQ generation failed: {str(e)}",
                 "difficulty": difficulty,
-                "token_usage": str(self.get_total_token_usage())
+                "token_usage": str(token_usage)
             }
 
     def generate_flashcards(self, subject: str, num_cards: int = 5, topic: Optional[str] = None, 
@@ -625,11 +620,12 @@ class GenerationAgent:
         Returns:
             Dict[str, Any]: Generated flashcards with validation results
         """
+        token_usage = TokenCount(0, 0, 0.0)
         try:
             # Validate difficulty level
             if difficulty not in ["easy", "medium", "hard", "challenging"]:
                 difficulty = "medium"  # Default to medium if invalid
-                
+
             # Determine the question based on the presence of topic
             if topic:
                 question = f"Generate {difficulty} flashcards for this content on the topic of {topic}"
@@ -758,7 +754,7 @@ class GenerationAgent:
             for card in valid_cards:
                 card["difficulty"] = difficulty
 
-            self.record_token_usage(
+            token_usage = self.record_token_usage(
                 f"{_format_docs(context_response.context)}\n{subject_rules}\n{difficulty}",
                 str(parsed_response)
             )
@@ -767,7 +763,7 @@ class GenerationAgent:
                 "flashcards": valid_cards[:num_cards],
                 "error": None,
                 "difficulty": difficulty,
-                "token_usage": str(self.get_total_token_usage())
+                "token_usage": str(token_usage)
             }
 
         except Exception as e:
@@ -775,7 +771,7 @@ class GenerationAgent:
             return {
                 "error": f"Flashcard generation failed: {str(e)}",
                 "difficulty": difficulty,
-                "token_usage": str(self.get_total_token_usage())
+                "token_usage": str(token_usage)
             }
 
     def chat_response(self, subject: str, question: str, session_id: Optional[str] = None,
@@ -783,11 +779,12 @@ class GenerationAgent:
         """
         Generate contextual educational responses to student questions with chat history support.
         """
+        token_usage = TokenCount(0, 0, 0.0)
         try:
             # Get or create session
             session = None
             if session_id:
-                session = self.active_sessions.get(session_id)
+                session = self.get_chat_session(session_id)
             if not session:
                 session_id = self.create_chat_session(subject, grade=grade)
                 session = self.active_sessions[session_id]
@@ -885,7 +882,7 @@ class GenerationAgent:
             session.add_message("assistant", answer, key_concepts=key_concepts)
 
             subject_rules = self._get_subject_rules(subject)
-            self.record_token_usage(
+            token_usage = self.record_token_usage(
                 f"{_format_docs(context_response.context)}\n{subject_rules}",
                 str(parsed_response)
             )
@@ -899,7 +896,7 @@ class GenerationAgent:
                     "follow_up_questions": parsed_response.get("follow_up_questions", []),
                 },
                 "error": None,
-                "token_usage": str(self.get_total_token_usage()),
+                "token_usage": str(token_usage),
             }
 
         except Exception as e:
@@ -910,7 +907,7 @@ class GenerationAgent:
                 "conversation_history": session.get_history_as_list() if session else [],
                 "current_response": None,
                 "error": f"Chat response generation failed: {str(e)}",
-                "token_usage": str(self.get_total_token_usage()),
+                "token_usage": str(token_usage),
             }
 
     def generate_notes(self, subject: str, topic: str, grade: Optional[int] = None, unit: Optional[str] = None, version: str = "1.0") -> Dict[str, Any]:
@@ -926,6 +923,7 @@ class GenerationAgent:
         Returns:
             Dict[str, Any]: Structured notes with validation results
         """
+        token_usage = TokenCount(0, 0, 0.0)
         try:
             # Get refined context for note generation
             context_response = self.context_agent.query_db(
@@ -1163,7 +1161,7 @@ class GenerationAgent:
                 "validation_note": notes_validation.get("reason", ""),
             }
 
-            self.record_token_usage(
+            token_usage = self.record_token_usage(
                 f"{_format_docs(context_response.context)}\n{subject_rules}",
                 str(parsed_response)
             )
@@ -1171,17 +1169,18 @@ class GenerationAgent:
             return {
                 "notes": parsed_response,
                 "error": None,
-                "token_usage": str(self.get_total_token_usage())
+                "token_usage": str(token_usage)
             }
 
         except Exception as e:
             self.logger.error(f"Error generating notes: {str(e)}")
             return {
                 "error": f"Notes generation failed: {str(e)}",
-                "token_usage": str(self.get_total_token_usage())
+                "token_usage": str(token_usage)
             }
 
     def evaluate_practice_answer(self, subject: str, question: Dict[str, Any], student_answer: str) -> Dict[str, Any]:
+        token_usage = TokenCount(0, 0, 0.0)
         try:
             # Input validation remains the same
             if not isinstance(question, dict) or 'question' not in question:
@@ -1290,8 +1289,7 @@ class GenerationAgent:
                     # Fallback: split on literal \n if model ignored the array instruction
                     correct_solution = [self._clean_unicode(s.strip()) for s in str(raw_solution).split("\\n") if s.strip()]
 
-                # Record first so token_usage in the result reflects this call
-                self.record_token_usage(
+                token_usage = self.record_token_usage(
                     f"{_format_docs(context_response.context)}\n{subject_rules}",
                     str(parsed_response)
                 )
@@ -1323,7 +1321,7 @@ class GenerationAgent:
                         for s in parsed_response.get("strengths", ["Areas of strength not identified"])
                         if str(s).strip()
                     ] or ["Areas of strength not identified"],
-                    "token_usage": str(self.get_total_token_usage()),
+                    "token_usage": str(token_usage),
                 }
 
                 return evaluation_result
@@ -1347,7 +1345,7 @@ class GenerationAgent:
                 "misconceptions": ["Evaluation failed"],
                 "key_points_missed": ["Evaluation failed"],
                 "strengths": ["Evaluation failed"],
-                "token_usage": str(self.get_total_token_usage())
+                "token_usage": str(token_usage)
             }
 
 # Example usage
