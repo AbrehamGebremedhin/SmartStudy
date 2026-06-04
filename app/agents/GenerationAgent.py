@@ -1,4 +1,5 @@
 import os
+import re
 import functools
 import random
 import time
@@ -249,11 +250,166 @@ class GenerationAgent:
             """
         elif subject.lower() == "sat":
             return """
-                - Balance between maths and english questions (1:1 ratio)
-                - Include step-by-step solutions for math problems
-                - Follow SAT question format guidelines
+                - Scholastic Aptitude Test: about 80% verbal reasoning, 20% quantitative/maths
+                - Verbal: analogies, synonyms, antonyms, word substitution, classification,
+                  sentence correction, reading comprehension, logical reasoning
+                - Quantitative: arithmetic, percentages, ratios, averages, basic algebra,
+                  number properties, data interpretation, basic geometry (with workout steps)
+                - Never generate questions about test-taking strategies or scoring rubrics
             """
         return "- General format rules apply"  # Default rules
+
+    def _get_mcq_subject_guidance(self, subject: str) -> str:
+        """
+        Extra MCQ-only guidance modelled on the actual EUEE exam format.
+
+        English and SAT target the Ethiopian University Entrance Exam. English is
+        reading-comprehension heavy; the "SAT" is mostly verbal aptitude (analogies,
+        synonyms, antonyms, etc.) with about 20% quantitative/maths reasoning mixed in.
+        Questions must be SELF-CONTAINED (answerable from the stem plus any embedded
+        `passage`) and must never point at the retrieval context the student cannot see.
+        Returns "" for other subjects.
+        """
+        s = subject.lower()
+        if s == "english":
+            return """
+                ENGLISH = EUEE ENGLISH (READING-COMPREHENSION HEAVY):
+                Target mix: about 75% reading-based questions and 25% grammar/usage questions.
+
+                READING-BASED QUESTIONS (the majority — roughly 3 of every 4):
+                - Each MUST include a SHORT self-contained passage (4-8 sentences) in the
+                  `passage` field, then ask ONE question about it. Vary the type across the set:
+                  * Main idea / true-according-to-passage: "Which statement is true according to
+                    the passage?" or "What is the main idea of the passage?"
+                  * Inference: what the passage implies but does not state outright.
+                  * Reference: "What does the word 'there'/'it'/'they'/'this' refer to in the
+                    passage?" (the referenced word must actually appear in the passage).
+                  * Vocabulary-in-context: "Which is closest in meaning to 'haggard' as used in
+                    the passage?" — the target word MUST appear verbatim in the passage.
+                - You write the passage yourself; make it coherent and self-contained. It need
+                  not be copied from the source. Several reading questions may not share a passage
+                  unless you intend them to — each carries its own passage.
+
+                GRAMMAR / USAGE QUESTIONS (the minority — roughly 1 of every 4, passage = null):
+                - Put a complete example sentence in the stem and test tense, subject-verb
+                  agreement, conditionals, tag questions, sentence structure, modifiers,
+                  prepositions, etc. Each option is a full candidate sentence or phrase.
+                  e.g. "Which sentence correctly uses the present perfect tense?"
+
+                FORBIDDEN: memorised lists, exercise layouts, "column A/B", answer keys, or any
+                test-administration fact. Never reference material the student cannot see.
+            """
+        if s == "sat":
+            return """
+                SAT = SCHOLASTIC APTITUDE TEST (~80% VERBAL REASONING + ~20% QUANTITATIVE):
+                Target mix per set: about 4 of every 5 questions VERBAL aptitude, and about
+                1 of every 5 questions QUANTITATIVE/MATH reasoning. Each is a standalone
+                4-option question; vary the types across the set.
+
+                VERBAL APTITUDE (~80%, the majority):
+                - Analogy: "KEY is to LOCK as ____ is to COMPUTER" (options complete the same
+                  relationship, e.g. PASSWORD). Name the relationship in the explanation.
+                - Synonym: "Which word is closest in meaning to PHONEY?" (e.g. Fake).
+                - Antonym: "Which word is most nearly OPPOSITE in meaning to <word>?".
+                - Word substitution: give a short definition/phrase, ask for the single word
+                  that means it.
+                - Classification (odd-one-out): four items where three share a category and one
+                  does not; ask which does NOT belong.
+                - Sentence correction: present a sentence and ask which version is grammatically
+                  correct, or which underlined part contains the error.
+                - Reading comprehension: include a SHORT self-contained passage (4-8 sentences)
+                  in the `passage` field, then ask a main-idea, inference, reference, or
+                  vocabulary-in-context question about it.
+                - Analytical / logical reasoning: a short self-contained deduction or logic
+                  puzzle answerable from the stem alone.
+
+                QUANTITATIVE / MATH (~20%, roughly 1 in every 5 questions):
+                - SAT-style problem solving: arithmetic, percentages, ratios and proportions,
+                  averages, basic algebra (linear/quadratic), number properties, simple data
+                  interpretation, and basic geometry.
+                - Put the ENTIRE problem in the question stem (passage = null), keep it
+                  self-contained, and provide a clear step-by-step solution in `workout_steps`.
+                  Use ^ for superscript and _ for subscript (e.g. x^2).
+
+                STRICTLY FORBIDDEN for SAT:
+                - US-style two-blank sentence completion.
+                - Questions ABOUT test-taking strategies, study methods, reading pace, scoring
+                  rubrics, or exam format (e.g. "the 4Ps strategy", "the BLANKS strategy",
+                  "passage evidence"). Those describe a prep book, not the exam. Test ability
+                  directly.
+            """
+        return ""
+
+    def _get_grounding_rule(self, subject: str) -> str:
+        """
+        How tightly generated content must hug the retrieved source text.
+
+        English/SAT are aptitude exams: analogies, synonyms and reading passages cannot be
+        "quoted" from a grammar reference, so strict grounding is wrong for them — the source
+        is used to calibrate vocabulary and difficulty, not to copy from. All other subjects
+        keep strict grounding so curriculum content stays inside the provided material. The
+        rule is phrased format-neutrally so it can be reused by MCQs, flashcards, notes, chat
+        and answer evaluation alike.
+        """
+        if subject.lower() in ("sat", "english"):
+            return """
+                GROUNDING RULE (calibration): Use the provided context to calibrate the
+                vocabulary level, topics, and difficulty to what a student at this level studies.
+                You do NOT need to quote or copy the context: aptitude content (analogies,
+                synonyms, antonyms, classification, reasoning, reading passages, basic maths) may
+                use appropriate general vocabulary, examples and relationships rather than being
+                lifted from the source. Stay within the kind of language and topics the context
+                represents; do not drift into unrelated specialist material.
+            """
+        return """
+                CONTEXT GROUNDING RULE: Every piece of generated content must be drawn
+                exclusively from the provided context. You may elaborate on and clarify what the
+                context contains, but do not introduce concepts, facts, examples, or details that
+                do not appear in the context. If something is not in the context, do not include it.
+            """
+
+    def _get_subject_focus(self, subject: str) -> str:
+        """
+        Format-neutral description of WHAT English/SAT content should cover, reused by
+        flashcards and notes (MCQs have their own, format-specific guidance). Returns "" for
+        subjects that need no special steering.
+        """
+        s = subject.lower()
+        if s == "english":
+            return """
+                ENGLISH FOCUS: emphasise reading and language skills — reading comprehension and
+                inference, vocabulary (meaning in context, synonyms/antonyms, word formation),
+                and grammar/usage (tenses, subject-verb agreement, conditionals, sentence
+                structure, modifiers, tag questions, punctuation). Do not build content around
+                exercise layouts, word-lists or test-administration material.
+            """
+        if s == "sat":
+            return """
+                SAT FOCUS (Scholastic Aptitude Test): cover about 80% verbal aptitude and 20%
+                quantitative. Verbal = vocabulary (synonyms, antonyms, word meanings), analogies
+                and word relationships, classification, sentence correction/grammar, reading and
+                verbal reasoning, logical reasoning. Quantitative = arithmetic, percentages,
+                ratios, averages, basic algebra, number properties, data interpretation, basic
+                geometry. Do not cover test-taking strategies or scoring rubrics.
+            """
+        return ""
+
+    def _presentation_rules(self) -> str:
+        """
+        Shared no-meta-reference / no-administration-trivia rules for student-facing generated
+        content (flashcards, notes). Chat and answer evaluation already address the student
+        directly and carry their own equivalent rules.
+        """
+        return """
+                PRESENTATION RULES:
+                - The student sees only this material, never the retrieval source. Never write
+                  "according to the context", "based on the passage/source", "as the table / list
+                  / exercise shows", and never cite exercise numbers, columns, page numbers or
+                  answer keys.
+                - Never include test-administration or test-prep material — scoring rubrics,
+                  marking schemes, band/level descriptors, study strategies, reading-pace advice,
+                  time/word/file limits. Teach the academic knowledge and skills only.
+            """
 
     def _clean_unicode(self, text: str) -> str:
         """
@@ -373,6 +529,54 @@ class GenerationAgent:
                 "raw_response": response
             }
 
+    # Contexts in which a bare capital letter A-D denotes an answer option, so it must be
+    # remapped when answer positions are reshuffled. In every alternative the option letter
+    # is the final captured character of the match (lookaheads do not consume), which lets
+    # the swap simply replace the last character.
+    _LETTER_REF_PATTERN = re.compile(
+        r'(?:option|options|choice|choices|answer|meaning|sentence|version|statement|letter)\s+([A-D])\b'
+        r'|\b(?:answer|correct\s+answer)\s+is\s+([A-D])\b'
+        r'|\b(?:only|both|neither|either)\s+([A-D])\b'
+        r'|(?:Thus|Hence|Therefore|So),?\s+([A-D])\b'
+        r'|\b([A-D])(?=\s+(?:is|are|was|were)\s+(?:correct|incorrect|right|wrong|the\b))'
+        r'|\b([A-D])(?=\s+corrects?\b)',
+        re.IGNORECASE,
+    )
+
+    def _swap_letter_refs(self, text: str, letter_a: str, letter_b: str) -> str:
+        """
+        Swap option-letter references between letter_a and letter_b in explanation text.
+
+        The model frequently labels options by letter ("Thus B is correct", "meaning A",
+        "the correct answer is C") despite being told not to. After answer positions are
+        reshuffled those references go stale, so this rewrites them in sync with the swap.
+        A null-byte sentinel marks already-swapped letters so a single pass can transpose
+        both directions without re-swapping.
+        """
+        if not text or letter_a == letter_b:
+            return text
+        sentinel = {letter_a: f"\x00{letter_a}\x00", letter_b: f"\x00{letter_b}\x00"}
+
+        def replace(m: re.Match) -> str:
+            letter = next(g for g in m.groups() if g is not None)
+            if letter in (letter_a, letter_b):
+                other = letter_b if letter == letter_a else letter_a
+                return m.group(0)[:-1] + sentinel[other]  # last char is the option letter
+            return m.group(0)
+
+        swapped = self._LETTER_REF_PATTERN.sub(replace, text)
+        return swapped.replace(sentinel[letter_a], letter_a).replace(sentinel[letter_b], letter_b)
+
+    # Options whose text refers to other options by letter ("Both A and B", "Neither A nor
+    # C", "All/None of the above") cannot be reshuffled without becoming wrong, so questions
+    # containing them are left in place.
+    _SELF_REF_OPTION = re.compile(
+        r'\b(?:both|neither|either|options?|choices?)\b.*\b(?-i:[A-D])\b'
+        r'|\b(?:all|none)\s+of\s+the\s+above\b'
+        r'|\b(?-i:[A-D])\s+(?:and|or|nor)\s+(?-i:[A-D])\b',
+        re.IGNORECASE,
+    )
+
     def _redistribute_answer_positions(self, questions: List[Dict]) -> List[Dict]:
         """
         Physically reorder options arrays so correct answers are spread across A/B/C/D.
@@ -400,6 +604,10 @@ class GenerationAgent:
                 continue
 
             options = list(q.get("options", []))
+            # Options that cross-reference other option letters break when reshuffled.
+            if any(self._SELF_REF_OPTION.search(str(opt)) for opt in options):
+                result.append(q)
+                continue
             # Parse "X) text" into {letter: text}
             content: Dict[str, str] = {}
             for opt in options:
@@ -425,9 +633,48 @@ class GenerationAgent:
             q["options"] = new_options
             q["correct_answer"] = target
             q["incorrect_explanations"] = new_inc
+
+            # Update any stale letter references inside explanation text. The model
+            # sometimes writes "Option B" despite the letter-independence rule; after a
+            # transposition those references point to the wrong option. Swap them in sync
+            # with the content swap that was just performed.
+            q["correct_explanations"] = [
+                self._swap_letter_refs(e, current, target) if isinstance(e, str) else e
+                for e in q.get("correct_explanations", [])
+            ]
+            q["incorrect_explanations"] = {
+                k: self._swap_letter_refs(v, current, target) if isinstance(v, str) else v
+                for k, v in q["incorrect_explanations"].items()
+            }
+
             result.append(q)
 
         return result
+
+    def _retrieve_mcq_context(self, subject: str, grade: int, unit: str, difficulty: str):
+        """
+        Fetch the context used for MCQ generation.
+
+        The SAT set is ~80% verbal aptitude and ~20% quantitative, so we steer its retrieval
+        toward vocabulary, reading and reasoning material plus some quantitative problem
+        content — rather than letting a generic query pull only the test-strategy prose that
+        lives in the SAT prep PDFs. All other subjects use one straightforward query.
+        """
+        if subject.lower() == "sat":
+            question = (
+                f"{difficulty} aptitude material: vocabulary and word meanings, synonyms and "
+                f"antonyms, analogies and word relationships, reading comprehension passages, "
+                f"sentence correction and grammar, logical reasoning, and quantitative problem "
+                f"solving (arithmetic, percentages, ratios, algebra, data interpretation)"
+            )
+        else:
+            question = f"Generate {difficulty} MCQs for this content"
+
+        return self.context_agent.query_db(
+            subject=subject,
+            question=question,
+            grade=grade, unit=unit, type_req="quiz",
+        )
 
     @retry_on_none(max_retries=3)
     def generate_mcqs(self, subject: str, grade: int, unit: str, num_questions: int = 5, difficulty: str = "hard") -> Dict[str, Any]:
@@ -450,31 +697,66 @@ class GenerationAgent:
             if difficulty not in ["easy", "medium", "hard", "challenging"]:
                 difficulty = "medium"  # Default to medium if invalid
 
-            # Get refined context for MCQ generation
-            context_response = self.context_agent.query_db(
-                subject=subject,
-                question=f"Generate {difficulty} MCQs for this content",
-                grade=grade,
-                unit=unit,
-                type_req="quiz"
-            )
-            
+            # Get refined context for MCQ generation (verbal-focused query for SAT)
+            context_response = self._retrieve_mcq_context(subject, grade, unit, difficulty)
+
             if context_response.error:
                 return {"error": context_response.error}
 
             # Get subject-specific rules before creating the prompt
             subject_rules = self._get_subject_rules(subject)
+            subject_guidance = self._get_mcq_subject_guidance(subject) or "- No additional subject-specific rules."
+            grounding_rule = self._get_grounding_rule(subject)
 
             prompt = PromptTemplate.from_template("""
                 Generate {num_questions} {difficulty} multiple choice questions based on the following context.
 
-                CONTEXT GROUNDING RULE: Every question, option, and explanation must be drawn
-                exclusively from the provided context. You may elaborate on and clarify what the
-                context contains, but do not introduce concepts, facts, examples, or details that
-                do not appear in the context. If something is not in the context, do not include it.
+                {grounding_rule}
+
+                SELF-CONTAINED / NO META-REFERENCE RULE (critical): The student sees ONLY the
+                question text, the options, and the `passage` field when present — never the
+                source material. This rule applies to the question stem, the options, AND every
+                explanation. Therefore:
+                - NEVER write "according to the context", "based on the context/passage", "the
+                  context states/says", "the context specifically says", "not supported by the
+                  context", "as mentioned in the text/table", "in the passage above", "according
+                  to the guidelines", "in the matching exercise", "in column A/B", or any phrase
+                  that points at material the student cannot see — not even inside explanations.
+                - Explanations must justify the answer from general subject knowledge and the
+                  question's own content, NOT by citing the source ("the source text gives...").
+                - Ground the CONTENT of each question in the provided context, but phrase it as a
+                  stand-alone question answerable from the stem (plus `passage`) alone.
+                - If a question depends on a reading passage, a quoted sentence, or a vocabulary
+                  word in context, you MUST reproduce that text in the `passage` field. If you
+                  cannot supply the passage, do not write the question.
+
+                TEST STUDENT SKILLS, NOT ADMINISTRATION OR TEST-PREP TRIVIA: Some source
+                material is teacher- or coach-facing — assessment guidelines, marking schemes,
+                scoring rubrics, essay-band/level descriptors, answer keys, time/word/file
+                limits, exam logistics, study strategies, reading-pace advice. NEVER turn any of
+                that into a question (e.g. "what is the maximum length of a sound file", "which
+                rubric level shows convincing development", "what does the 4Ps strategy say").
+                Only test the student-facing knowledge and skills the material teaches (grammar,
+                vocabulary, reading, reasoning, concepts).
+
+                FOUR-OPTION RULE (strict): Every question must have EXACTLY four options labelled
+                "A)", "B)", "C)", "D)" — never three, never five. Even if the source uses a
+                five-choice format, compress to the four best options with one correct answer.
+
+                OPTION INDEPENDENCE RULE (strict): Options are reshuffled after generation, so no
+                option may refer to another option. NEVER write "Both A and B", "Neither A nor C",
+                "A and C only", "All of the above", or "None of the above". Each option must be a
+                complete, self-contained candidate answer that stands on its own.
+
+                TOPIC LABEL RULE: The `topic` names the concept tested (e.g. "Subject-verb
+                agreement", "Synonyms"). It must NOT reference the source's structure — no
+                "Word List 1", "Exercise 3", "Column A", "Scoring rubric", page or section numbers.
 
                 Subject Rules:
                 {subject_rules}
+
+                Subject-specific question design:
+                {subject_guidance}
 
                 Difficulty Level: {difficulty}
                 For {difficulty} questions:
@@ -493,6 +775,7 @@ class GenerationAgent:
                 {{"questions": [
                     {{
                         "topic": "specific topic or concept being tested",
+                        "passage": "the reading passage, quoted sentence, or sentence-with-blank the question depends on (reading comprehension, inference, vocabulary-in-context, sentence completion); null when the question is fully self-contained in the stem",
                         "question": "question text",
                         "options": ["A) option1", "B) option2", "C) option3", "D) option4"],
                         "correct_answer": "A",
@@ -510,6 +793,13 @@ class GenerationAgent:
                         "difficulty": "{difficulty}"
                     }}
                 ]}}
+
+                PASSAGE FIELD RULE: Use `passage` only when the question genuinely needs
+                accompanying text (a reading passage, a quoted line, or a sentence-completion
+                sentence with a "____" blank). For self-contained questions — most grammar,
+                vocabulary-definition, and standalone math/factual questions — set it to null.
+                When `passage` is present, the question must be answerable from the passage plus
+                the stem alone, and every explanation must stay consistent with that passage.
 
                 CRITICAL RULES for incorrect_explanations:
                 - The dict must contain ONLY the three wrong option letters.
@@ -553,6 +843,8 @@ class GenerationAgent:
                 "areas": context_response.parsed_answer.get("areas", []),
                 "num_questions": num_questions,
                 "subject_rules": subject_rules,
+                "subject_guidance": subject_guidance,
+                "grounding_rule": grounding_rule,
                 "difficulty": difficulty,
             }
 
@@ -577,11 +869,17 @@ class GenerationAgent:
             valid_questions = self._redistribute_answer_positions(valid_questions)
 
             # Normalise per-question fields the model sometimes gets wrong
+            _none_like = ("N/A", "NA", "NONE", "-", "NOT APPLICABLE", "NULL")
             for q in valid_questions:
                 q["difficulty"] = difficulty
                 ws = q.get("workout_steps")
-                if not ws or str(ws).strip().upper() in ("N/A", "NA", "NONE", "-", "NOT APPLICABLE", "NULL"):
+                if not ws or str(ws).strip().upper() in _none_like:
                     q["workout_steps"] = None
+                # Passage is optional; collapse missing/placeholder values to a real None so
+                # consumers can rely on `passage is None` to mean "self-contained question".
+                passage = q.get("passage")
+                if not passage or str(passage).strip().upper() in _none_like:
+                    q["passage"] = None
 
             token_usage = self.record_token_usage(
                 f"{_format_docs(context_response.context)}\n{subject_rules}\n{difficulty}",
@@ -636,6 +934,17 @@ class GenerationAgent:
                     unit=None,
                     type_req="chat"  # Use the same context fetching as chat response
                 )
+            elif subject.lower() == "sat":
+                # SAT is ~80% verbal aptitude / ~20% quantitative — steer retrieval so the
+                # generic query does not pull only test-strategy prose from the prep PDFs.
+                question = (
+                    f"{difficulty} aptitude material: vocabulary, synonyms and antonyms, "
+                    f"analogies, classification, sentence correction, reading and verbal "
+                    f"reasoning, and quantitative problem solving"
+                )
+                context_response = self.context_agent.query_db(
+                    subject=subject, question=question, grade=grade, unit=unit, type_req="quiz"
+                )
             else:
                 question = f"Generate {difficulty} flashcards for this content"
                 context_response = self.context_agent.query_db(
@@ -655,17 +964,22 @@ class GenerationAgent:
 
             # Get subject-specific rules before creating the prompt
             subject_rules = self._get_subject_rules(subject)
+            subject_focus = self._get_subject_focus(subject) or "- No additional subject focus."
+            grounding_rule = self._get_grounding_rule(subject)
+            presentation_rules = self._presentation_rules()
 
             prompt = PromptTemplate.from_template("""
                 Generate {num_cards} {difficulty} flashcards based on the following context.
 
-                CONTEXT GROUNDING RULE: Every card must be drawn exclusively from the provided
-                context. You may elaborate on and clarify what the context contains, but do not
-                introduce concepts, facts, examples, or details that do not appear in the context.
-                If something is not in the context, do not include it.
+                {grounding_rule}
+
+                {presentation_rules}
 
                 Subject Rules:
                 {subject_rules}
+
+                Subject focus:
+                {subject_focus}
 
                 FRONT SIDE RULE (critical): The front must be a single, short prompt — one sentence
                 or one clear question, maximum 15 words. It must be instantly scannable. Do NOT write
@@ -723,6 +1037,9 @@ class GenerationAgent:
                 "num_cards": num_cards,
                 "difficulty": difficulty,
                 "subject_rules": subject_rules,
+                "subject_focus": subject_focus,
+                "grounding_rule": grounding_rule,
+                "presentation_rules": presentation_rules,
             })
 
             parsed_response = self._parse_llm_response(str(response))
@@ -743,6 +1060,9 @@ class GenerationAgent:
                     "num_cards": replacement_count,
                     "difficulty": difficulty,
                     "subject_rules": subject_rules,
+                    "subject_focus": subject_focus,
+                    "grounding_rule": grounding_rule,
+                    "presentation_rules": presentation_rules,
                 })
 
                 additional_parsed = self._parse_llm_response(str(additional_response))
@@ -825,12 +1145,10 @@ class GenerationAgent:
                 Previous conversation (may be empty for a new session):
                 {chat_history}
 
-                CONTEXT GROUNDING RULE: Base your answer on the provided reference material.
-                You may explain and expand on what the material contains, but do not introduce
-                facts, concepts, examples, or details that are not present in the reference
-                material. If the reference material does not cover something the student asks,
-                acknowledge that and redirect to what the material does cover — do not draw
-                from general knowledge to fill the gap.
+                {grounding_rule}
+
+                If the student asks about something genuinely outside the scope of this subject
+                and reference material, acknowledge that and steer back to what you can address.
 
                 Using the reference material and the conversation history, answer the student's
                 current question clearly and build on anything already discussed.
@@ -868,6 +1186,7 @@ class GenerationAgent:
                 "current_title": session.title,
                 "subject": session.subject,
                 "grade_line": f"\n{grade_line}" if grade_line else "",
+                "grounding_rule": self._get_grounding_rule(subject),
             })
 
             parsed_response = self._parse_llm_response(str(response))
@@ -939,16 +1258,20 @@ class GenerationAgent:
 
             # Get subject-specific rules before creating the prompt
             subject_rules = self._get_subject_rules(subject)
-            
+            subject_focus = self._get_subject_focus(subject) or "- No additional subject focus."
+            grounding_rule = self._get_grounding_rule(subject)
+            presentation_rules = self._presentation_rules()
+
             # Enhanced note generation prompt with more detailed structure
             prompt = PromptTemplate.from_template("""
                 Generate comprehensive educational notes on the topic based on the provided context.
 
-                CONTEXT GROUNDING RULE: Every section — key concepts, examples, worked examples,
-                theories, formulas, misconceptions — must be drawn exclusively from the provided
-                context. You may elaborate on and deepen what the context contains, but do not
-                introduce concepts, facts, examples, or details that do not appear in the context.
-                The context is the grade-level curriculum material; your notes must stay within it.
+                {grounding_rule}
+
+                {presentation_rules}
+
+                Subject focus:
+                {subject_focus}
 
                 Structure your response in the following detailed JSON format:
                 {{
@@ -1063,15 +1386,18 @@ class GenerationAgent:
                   - Maths, physics, chemistry: include all relevant equations with derivations
                   - Biology, economics: include only if quantitative formulas appear in the context; otherwise []
                   - Humanities (history, civics, geography, general_business, english): always []
+                  - SAT: always []
 
                 worked_examples:
                   - Maths, physics, chemistry: step-by-step problem → solution walkthroughs
                   - Biology: 2+ scenario-based walkthroughs (e.g., "A site is contaminated with mercury — walk through how a bioremediation engineer would approach it step-by-step, including decision points and expected outcomes"). Do NOT leave this as [].
                   - Economics: scenario analysis walkthroughs (policy decision → effects)
+                  - SAT: 1-2 step-by-step walkthroughs for the quantitative portion (e.g. a percentage or ratio problem), or for working an analogy/word-relationship; otherwise []
                   - Humanities: always []
 
                 practice_problems:
                   - All science and maths subjects: include at Basic / Intermediate / Advanced levels
+                  - SAT: include verbal aptitude items (analogies, synonyms, antonyms, classification) and a few quantitative problems, at Basic / Intermediate / Advanced levels
                   - Humanities: always []
 
                 theoretical_framework.theories:
@@ -1121,7 +1447,10 @@ class GenerationAgent:
                 "context": _format_docs(context_response.context),
                 "topic": topic,
                 "subject": subject,
-                "rules": self._get_subject_rules(subject),
+                "rules": subject_rules,
+                "subject_focus": subject_focus,
+                "grounding_rule": grounding_rule,
+                "presentation_rules": presentation_rules,
             })
 
             parsed_response = self._parse_llm_response(str(response))
@@ -1213,10 +1542,8 @@ class GenerationAgent:
 
                 Your task is to evaluate the student's answer and provide feedback directly to the student.
 
-                CONTEXT GROUNDING RULE: The correct solution steps, key points, and feedback must
-                be grounded in the provided context and expected approach. Do not introduce
-                alternative methods, concepts, or details that are outside the scope of what the
-                context and solution approach cover.
+                {grounding_rule}
+                Keep the correct solution and feedback consistent with the expected approach above.
 
                 CRITICAL RULES:
                 - Address the student directly ("Your answer...", "You correctly...", "You missed...").
@@ -1265,7 +1592,8 @@ class GenerationAgent:
                 "question": question["question"],
                 "solution_approach": question.get("solution_approach", ""),
                 "student_answer": student_answer,
-                "context": _format_docs(context_response.context)
+                "context": _format_docs(context_response.context),
+                "grounding_rule": self._get_grounding_rule(subject),
             })
 
             # Parse response with enhanced error handling
@@ -1354,7 +1682,7 @@ if __name__ == "__main__":
     
     # Generate MCQs
     mcqs = agent.generate_mcqs(
-        subject="biology",
+        subject="sat",
         grade=12,
         unit="3",
         num_questions=10

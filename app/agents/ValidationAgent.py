@@ -84,6 +84,10 @@ class ValidationAgent:
             if not isinstance(mcq["correct_explanations"], list) or \
                not isinstance(mcq["incorrect_explanations"], dict):
                 struct_invalid.add(i); continue
+            # The app assumes a fixed four-option A-D format everywhere (answer
+            # redistribution, option labelling). Reject anything else so it is regenerated.
+            if not isinstance(mcq["options"], list) or len(mcq["options"]) != 4:
+                struct_invalid.add(i); continue
             options = [opt[0] for opt in mcq["options"]]
             incorrect_opts = [o for o in options if o != mcq["correct_answer"]]
             if not all(o in mcq["incorrect_explanations"] for o in incorrect_opts):
@@ -102,13 +106,37 @@ class ValidationAgent:
             }
 
         # --- single batch LLM call for remaining candidates ---
-        numbered = "\n".join(
-            f"{i}. Q: {mcqs[i]['question']} | Answer: {mcqs[i]['correct_answer']}"
-            for i in candidates
-        )
+        # Include the passage when a question carries one so the validator judges
+        # passage-dependent reading/vocab questions on their own terms, not as if the
+        # stem alone had to be answerable.
+        def _line(i: int) -> str:
+            mcq = mcqs[i]
+            passage = mcq.get("passage")
+            base = f"{i}. Q: {mcq['question']} | Answer: {mcq['correct_answer']}"
+            if passage and str(passage).strip():
+                return f"{base} | Passage: {str(passage).strip()}"
+            return base
+
+        numbered = "\n".join(_line(i) for i in candidates)
         prompt = PromptTemplate.from_template("""
-            Validate these MCQs against the context and focus areas.
+            Validate these MCQs for the subject area represented by the context and focus areas.
             For each numbered question return whether it is valid.
+
+            A question is VALID when it is on-topic for this subject area, self-contained, has
+            exactly one defensible correct answer, and is answerable from its own stem plus its
+            Passage (when one is shown). The question need NOT quote the context verbatim —
+            vocabulary, analogy, reasoning and reading questions may use their own wording and
+            their own passage, as long as they stay within the subject's level and topics.
+
+            Mark a question INVALID if any of these hold:
+            - it is off-topic for the subject;
+            - it has no correct answer, or more than one defensible correct answer;
+            - it depends on a reading passage / quoted line / vocabulary-in-context word that is
+              NOT supplied in its Passage;
+            - it tests test-administration or test-prep material rather than an academic skill —
+              e.g. scoring rubrics, essay-band/level descriptors, marking schemes, answer keys,
+              study strategies, reading-pace advice, time/word/file limits, or exam logistics;
+            - an option refers to another option ("Both A and B", "All of the above", etc.).
 
             Context: {context}
             Focus Areas: {areas}
@@ -174,8 +202,15 @@ class ValidationAgent:
             for i in candidates
         )
         prompt = PromptTemplate.from_template("""
-            Validate these flashcards against the context and focus areas.
-            Each card must be relevant to the context and cover a topic from the focus areas.
+            Validate these flashcards for the subject area represented by the context and focus
+            areas. A card is VALID when it is on-topic for this subject area and teaches a clear,
+            correct piece of knowledge or skill. The card need NOT quote the context verbatim —
+            vocabulary, analogy, grammar and reasoning cards may use their own wording as long as
+            they stay within the subject's level and topics.
+
+            Mark a card INVALID only if it is off-topic for the subject, factually wrong, or tests
+            test-administration / test-prep material (scoring rubrics, marking schemes, study
+            strategies, exam logistics) rather than an academic skill.
 
             Context: {context}
             Focus Areas: {areas}
