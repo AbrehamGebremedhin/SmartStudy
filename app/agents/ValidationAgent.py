@@ -38,7 +38,7 @@ class ValidationAgent:
         if not api_key:
             raise ValueError("DEEPSEEK_API_KEY not found in environment")
 
-        self.llm = ChatDeepSeek(model="deepseek-chat", api_key=api_key)
+        self.llm = ChatDeepSeek(model="deepseek-v4-flash", api_key=api_key)
         # NOTE: tiktoken's gpt-3.5-turbo encoding is an APPROXIMATION for DeepSeek, which
         # uses a different tokenizer. Token counts and cost estimates are indicative only.
         self.token_counter = tiktoken.encoding_for_model("gpt-3.5-turbo")

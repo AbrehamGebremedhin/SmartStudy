@@ -60,7 +60,7 @@ class ContextRefinementAgent:
             raise ContextRefinementError("DEEPSEEK_API_KEY not found in environment")
 
         try:
-            self.llm = ChatDeepSeek(model="deepseek-chat", api_key=api_key)
+            self.llm = ChatDeepSeek(model="deepseek-v4-flash", api_key=api_key)
             self.retrieval_agent = RetrievalAgent()
             self.parser = JsonOutputParser()
             self._prompt_cache: Dict[str, PromptTemplate] = {}

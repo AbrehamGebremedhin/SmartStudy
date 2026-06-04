@@ -144,7 +144,7 @@ class GenerationAgent:
         if not api_key:
             raise ValueError("DEEPSEEK_API_KEY not found in environment")
 
-        self.llm = ChatDeepSeek(model="deepseek-chat", api_key=api_key)
+        self.llm = ChatDeepSeek(model="deepseek-v4-flash", api_key=api_key)
         # JSON mode — forces DeepSeek to always return valid JSON
         self._json_llm = self.llm.bind(response_format={"type": "json_object"})
         self.context_agent = ContextRefinementAgent()
