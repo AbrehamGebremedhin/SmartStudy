@@ -67,125 +67,149 @@ class ValidationAgent:
     def _run_chain(self, prompt: PromptTemplate, inputs: dict) -> str:
         if "context" in inputs:
             inputs = {**inputs, "context": _format_docs(inputs["context"])}
-        chain = prompt | self.llm | StrOutputParser()
+        json_llm = self.llm.bind(response_format={"type": "json_object"})
+        chain = prompt | json_llm | StrOutputParser()
         return chain.invoke(inputs)
 
     def validate_mcqs(self, mcqs: List[Dict], context, areas: List[str]) -> Dict[str, Any]:
-        invalid_indices = []
+        if not mcqs:
+            return {"valid_mcqs": [], "invalid_indices": [], "needs_replacement": False,
+                    "token_usage": str(self.get_total_token_usage())}
+
+        # --- structural checks (no API call) ---
+        struct_invalid: set = set()
+        seen_questions: set = set()
         for i, mcq in enumerate(mcqs):
-            if not all(key in mcq for key in ["topic", "question", "options", "correct_answer", "correct_explanations", "incorrect_explanations"]):
-                invalid_indices.append(i)
-                continue
-
+            required = ["topic", "question", "options", "correct_answer",
+                        "correct_explanations", "incorrect_explanations"]
+            if not all(k in mcq for k in required):
+                struct_invalid.add(i); continue
             if not mcq["topic"] or not isinstance(mcq["topic"], str):
-                invalid_indices.append(i)
-                continue
-
-            if not isinstance(mcq["correct_explanations"], list) or not isinstance(mcq["incorrect_explanations"], dict):
-                invalid_indices.append(i)
-                continue
-
+                struct_invalid.add(i); continue
+            if not isinstance(mcq["correct_explanations"], list) or \
+               not isinstance(mcq["incorrect_explanations"], dict):
+                struct_invalid.add(i); continue
             options = [opt[0] for opt in mcq["options"]]
-            correct_opt = mcq["correct_answer"]
-            incorrect_opts = [opt for opt in options if opt != correct_opt]
-            if not all(opt in mcq["incorrect_explanations"] for opt in incorrect_opts):
-                invalid_indices.append(i)
-                continue
+            incorrect_opts = [o for o in options if o != mcq["correct_answer"]]
+            if not all(o in mcq["incorrect_explanations"] for o in incorrect_opts):
+                struct_invalid.add(i); continue
+            if mcq["question"] in seen_questions:
+                struct_invalid.add(i); continue
+            seen_questions.add(mcq["question"])
 
-            if any(mcq["question"] == other["question"] for other in mcqs[:i]):
-                invalid_indices.append(i)
-                continue
+        candidates = [i for i in range(len(mcqs)) if i not in struct_invalid]
+        if not candidates:
+            return {
+                "valid_mcqs": [],
+                "invalid_indices": list(struct_invalid),
+                "needs_replacement": True,
+                "token_usage": str(self.get_total_token_usage()),
+            }
 
-            prompt = PromptTemplate.from_template("""
-                Validate if this MCQ is valid based on the following criteria:
-                1. Question is relevant to the context
-                2. Question covers one of the focus areas
-                3. Correct answer is clearly correct
-                4. Options are distinct and reasonable
+        # --- single batch LLM call for remaining candidates ---
+        numbered = "\n".join(
+            f"{i}. Q: {mcqs[i]['question']} | Answer: {mcqs[i]['correct_answer']}"
+            for i in candidates
+        )
+        prompt = PromptTemplate.from_template("""
+            Validate these MCQs against the context and focus areas.
+            For each numbered question return whether it is valid.
 
-                Context: {context}
-                Focus Areas: {areas}
-                Question: {question}
-                Options: {options}
-                Correct Answer: {answer}
+            Context: {context}
+            Focus Areas: {areas}
+            Questions:
+            {questions}
 
-                Return JSON: {{"is_valid": boolean, "reason": "explanation if invalid"}}
-            """)
+            Return JSON with this exact structure:
+            {{"results": [{{"index": 0, "is_valid": true, "reason": ""}}]}}
+            Include one entry per question using the original index numbers shown above.
+        """)
+        llm_invalid: set = set()
+        try:
+            response = self._run_chain(prompt, {
+                "context": context,
+                "areas": areas,
+                "questions": numbered,
+            })
+            parsed = json.loads(str(response))
+            for entry in parsed.get("results", []):
+                if not entry.get("is_valid", True):
+                    llm_invalid.add(int(entry["index"]))
+            self.record_token_usage(numbered, str(parsed))
+        except Exception:
+            pass  # on batch failure keep all candidates as valid
 
-            try:
-                response = self._run_chain(prompt, {
-                    "context": context,
-                    "areas": areas,
-                    "question": mcq["question"],
-                    "options": mcq["options"],
-                    "answer": mcq["correct_answer"],
-                })
-                validation = json.loads(str(response))
-                if not validation.get("is_valid", False):
-                    invalid_indices.append(i)
-                self.record_token_usage(
-                    f"{_format_docs(context)}\n{mcq['question']}\n{str(mcq['options'])}\n{mcq['correct_answer']}",
-                    str(validation)
-                )
-            except Exception:
-                invalid_indices.append(i)
-
+        invalid_indices = sorted(struct_invalid | llm_invalid)
         return {
             "valid_mcqs": [mcq for i, mcq in enumerate(mcqs) if i not in invalid_indices],
             "invalid_indices": invalid_indices,
             "needs_replacement": len(invalid_indices) > 0,
-            "token_usage": str(self.get_total_token_usage())
+            "token_usage": str(self.get_total_token_usage()),
         }
 
     def validate_flashcards(self, flashcards: List[Dict], context, areas: List[str]) -> Dict[str, Any]:
-        invalid_indices = []
+        if not flashcards:
+            return {"valid_flashcards": [], "invalid_indices": [], "needs_replacement": False,
+                    "token_usage": str(self.get_total_token_usage())}
+
+        # --- structural checks (no API call) ---
+        struct_invalid: set = set()
+        seen_fronts: set = set()
         for i, card in enumerate(flashcards):
-            if not all(key in card for key in ["front", "back", "topic"]):
-                invalid_indices.append(i)
-                continue
+            if not all(k in card for k in ["front", "back", "topic"]):
+                struct_invalid.add(i); continue
+            if card["front"] in seen_fronts:
+                struct_invalid.add(i); continue
+            seen_fronts.add(card["front"])
 
-            if any(card["front"] == other["front"] for other in flashcards[:i]):
-                invalid_indices.append(i)
-                continue
+        candidates = [i for i in range(len(flashcards)) if i not in struct_invalid]
+        if not candidates:
+            return {
+                "valid_flashcards": [],
+                "invalid_indices": list(struct_invalid),
+                "needs_replacement": True,
+                "token_usage": str(self.get_total_token_usage()),
+            }
 
-            prompt = PromptTemplate.from_template("""
-                Validate if this flashcard is valid based on the following criteria:
-                1. Content is relevant to the context
-                2. Topic matches one of the focus areas
-                3. Front and back are clear and accurate
+        # --- single batch LLM call for remaining candidates ---
+        numbered = "\n".join(
+            f"{i}. Front: {flashcards[i]['front']} | Topic: {flashcards[i]['topic']}"
+            for i in candidates
+        )
+        prompt = PromptTemplate.from_template("""
+            Validate these flashcards against the context and focus areas.
+            Each card must be relevant to the context and cover a topic from the focus areas.
 
-                Context: {context}
-                Focus Areas: {areas}
-                Front: {front}
-                Back: {back}
-                Topic: {topic}
+            Context: {context}
+            Focus Areas: {areas}
+            Flashcards:
+            {cards}
 
-                Return JSON: {{"is_valid": boolean, "reason": "explanation if invalid"}}
-            """)
+            Return JSON with this exact structure:
+            {{"results": [{{"index": 0, "is_valid": true, "reason": ""}}]}}
+            Include one entry per card using the original index numbers shown above.
+        """)
+        llm_invalid: set = set()
+        try:
+            response = self._run_chain(prompt, {
+                "context": context,
+                "areas": areas,
+                "cards": numbered,
+            })
+            parsed = json.loads(str(response))
+            for entry in parsed.get("results", []):
+                if not entry.get("is_valid", True):
+                    llm_invalid.add(int(entry["index"]))
+            self.record_token_usage(numbered, str(parsed))
+        except Exception:
+            pass  # on batch failure keep all candidates as valid
 
-            try:
-                response = self._run_chain(prompt, {
-                    "context": context,
-                    "areas": areas,
-                    "front": card["front"],
-                    "back": card["back"],
-                    "topic": card["topic"],
-                })
-                validation = json.loads(str(response))
-                if not validation.get("is_valid", False):
-                    invalid_indices.append(i)
-                self.record_token_usage(
-                    f"{_format_docs(context)}\n{card['front']}\n{card['back']}\n{card['topic']}",
-                    str(validation)
-                )
-            except Exception:
-                invalid_indices.append(i)
-
+        invalid_indices = sorted(struct_invalid | llm_invalid)
         return {
             "valid_flashcards": [card for i, card in enumerate(flashcards) if i not in invalid_indices],
             "invalid_indices": invalid_indices,
             "needs_replacement": len(invalid_indices) > 0,
-            "token_usage": str(self.get_total_token_usage())
+            "token_usage": str(self.get_total_token_usage()),
         }
 
     def validate_chat_response(self, response: Dict, context, keypoints: List[str]) -> Dict[str, Any]:
