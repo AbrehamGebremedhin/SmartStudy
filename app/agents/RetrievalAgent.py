@@ -81,10 +81,15 @@ class RetrievalAgent:
 
     def _build_filter(self, subject: str, grade: Optional[int], unit: Optional[str], type_req: str) -> str:
         parts = [f'subject == "{subject}"']
-        if type_req not in ("chat",) and subject not in ("sat", "english"):
+        # sat/english are cross-grade supplements with no grade/unit metadata, so never
+        # filter on those fields for them.
+        if subject not in ("sat", "english"):
+            # Grade narrows both chat and quiz/notes retrieval when it is known — a Grade 9
+            # student should not get Grade 12 content in chat answers.
             if grade is not None:
                 parts.append(f'grade == "{grade}"')
-            if unit is not None:
+            # Unit only narrows quiz/notes generation; chat stays grade-wide across units.
+            if unit is not None and type_req not in ("chat",):
                 parts.append(f'unit == "{unit}"')
         return " and ".join(parts)
 

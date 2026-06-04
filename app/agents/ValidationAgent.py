@@ -39,6 +39,8 @@ class ValidationAgent:
             raise ValueError("DEEPSEEK_API_KEY not found in environment")
 
         self.llm = ChatDeepSeek(model="deepseek-chat", api_key=api_key)
+        # NOTE: tiktoken's gpt-3.5-turbo encoding is an APPROXIMATION for DeepSeek, which
+        # uses a different tokenizer. Token counts and cost estimates are indicative only.
         self.token_counter = tiktoken.encoding_for_model("gpt-3.5-turbo")
         self.token_counts = []
         self.COST_PER_1M_INPUT = 0.27
@@ -303,16 +305,19 @@ class ValidationAgent:
                 f"{_format_docs(context)}\n{json.dumps(notes)}",
                 str(validation)
             )
+            # Fail open (consistent with validate_chat_response): assume valid unless the
+            # model explicitly says otherwise.
+            is_valid = validation.get("is_valid", True)
             return {
-                "is_valid": validation.get("is_valid", False),
+                "is_valid": is_valid,
                 "reason": validation.get("reason", ""),
-                "needs_regeneration": not validation.get("is_valid", False),
+                "needs_regeneration": not is_valid,
                 "token_usage": str(self.get_total_token_usage())
             }
         except Exception:
             return {
-                "is_valid": False,
-                "reason": "Failed to validate notes",
-                "needs_regeneration": True,
+                "is_valid": True,
+                "reason": "Validation parsing failed - assuming valid",
+                "needs_regeneration": False,
                 "token_usage": str(self.get_total_token_usage())
             }

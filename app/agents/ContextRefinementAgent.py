@@ -3,7 +3,6 @@ import json
 import logging
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
-from functools import lru_cache
 from tenacity import retry, stop_after_attempt, wait_exponential
 from dotenv import load_dotenv
 from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
@@ -64,6 +63,9 @@ class ContextRefinementAgent:
             self.llm = ChatDeepSeek(model="deepseek-chat", api_key=api_key)
             self.retrieval_agent = RetrievalAgent()
             self.parser = JsonOutputParser()
+            self._prompt_cache: Dict[str, PromptTemplate] = {}
+            # NOTE: tiktoken's gpt-3.5-turbo encoding is an APPROXIMATION for DeepSeek, which
+            # uses a different tokenizer. Token counts and cost estimates are indicative only.
             self.token_counter = tiktoken.encoding_for_model("gpt-3.5-turbo")
             self.token_counts = []
             self.COST_PER_1M_INPUT = 0.27
@@ -85,8 +87,9 @@ class ContextRefinementAgent:
         chain = prompt | self.llm | StrOutputParser()
         return chain.invoke(inputs)
 
-    @lru_cache(maxsize=128)
     def get_prompt(self, type_request: str) -> PromptTemplate:
+        if type_request in self._prompt_cache:
+            return self._prompt_cache[type_request]
         if type_request == "chat":
             prompt_template = """
                 <|system|> You are an expert in extracting key points from educational content to assist in learning. Your task is to analyze the provided context and the student's question in the subject of {subject}, and then identify key points that address the student's query and provide additional helpful information.
@@ -161,7 +164,9 @@ class ContextRefinementAgent:
                 - Ensure the JSON is properly escaped and valid.
             """
 
-        return PromptTemplate.from_template(prompt_template)
+        template = PromptTemplate.from_template(prompt_template)
+        self._prompt_cache[type_request] = template
+        return template
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     def summarize_content(self, context, max_length: int = 500, include_structure: bool = False) -> Dict[str, Any]:
@@ -247,7 +252,8 @@ class ContextRefinementAgent:
                     subject, question, grade, unit, "notes", k_multiplier=1.25
                 )
             elif type_req == "chat":
-                context = self.retrieval_agent.query_vector_store(subject, question, None, None, type_req)
+                # Pass grade through so chat retrieval is scoped to the student's grade when known
+                context = self.retrieval_agent.query_vector_store(subject, question, grade, None, type_req)
             else:
                 context = self.retrieval_agent.query_vector_store(subject, question, grade, unit, type_req)
 

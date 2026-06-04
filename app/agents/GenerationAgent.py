@@ -1,18 +1,18 @@
 import os
 import functools
 import random
+import time
 from typing import Dict, Any, Optional, List
 from dotenv import load_dotenv
 from langchain_deepseek import ChatDeepSeek
 from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 from langchain_core.prompts import PromptTemplate
 from langchain_core.documents import Document
-from RetrievalAgent import RetrievalAgent
 import json
 import logging
 from ContextRefinementAgent import ContextRefinementAgent
 from ValidationAgent import ValidationAgent
-from datetime import datetime
+from datetime import datetime, timedelta
 import uuid
 from dataclasses import dataclass, field
 import tiktoken
@@ -60,10 +60,13 @@ class ChatSession:
         ))
 
     def get_recent_context(self, max_messages: int = 10) -> str:
-        """Return the last N messages formatted for the LLM, excluding the most recent user turn."""
-        # Exclude the last message (current user question — passed separately via {question})
-        prior = self.messages[:-1] if self.messages else []
-        recent = prior[-max_messages:] if len(prior) > max_messages else prior
+        """Return the last N messages formatted for the LLM.
+
+        Callers must invoke this BEFORE appending the current user question to the
+        session, so every message already stored here is prior context (the last one
+        being the previous assistant reply). No trailing slice is needed.
+        """
+        recent = self.messages[-max_messages:] if len(self.messages) > max_messages else self.messages
         return "\n".join(f"{m.role}: {m.content}" for m in recent)
 
     def get_history_as_list(self) -> List[Dict[str, Any]]:
@@ -88,7 +91,7 @@ def retry_on_none(max_retries=3):
         ValueError: If no valid response is received after max retries
         
     Notes:
-        - Retries immediately without delay
+        - Waits with exponential backoff (2 ** attempt seconds) between retries
         - Stops retrying if function returns non-None value
         - Useful for functions with potential transient failures
     """
@@ -99,6 +102,9 @@ def retry_on_none(max_retries=3):
                 result = func(*args, **kwargs)
                 if result is not None:
                     return result
+                # Back off before the next attempt (skip the wait after the final try)
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)
             raise ValueError(f"Failed to get a valid response after {max_retries} attempts")
         return wrapper
     return decorator_retry
@@ -145,6 +151,10 @@ class GenerationAgent:
         self.stem_subjects = ["maths", "physics", "chemistry", "biology", "economics"]
         self.humanities_subjects = ["english", "history", "geography", "civics", "general_business"]
         self.active_sessions: Dict[str, ChatSession] = {}
+        # Sessions older than this are dropped on the next create to bound memory growth
+        self.session_ttl_hours = float(os.getenv("CHAT_SESSION_TTL_HOURS", "24"))
+        # NOTE: tiktoken's gpt-3.5-turbo encoding is an APPROXIMATION for DeepSeek, which
+        # uses a different tokenizer. Token counts and cost estimates are indicative only.
         self.token_counter = tiktoken.encoding_for_model("gpt-3.5-turbo")
         self.token_counts = []
         self.COST_PER_1M_INPUT = 0.27   # DeepSeek-V3: $0.27 per 1M input tokens
@@ -175,9 +185,19 @@ class GenerationAgent:
         total_cost = sum(tc.total_cost for tc in self.token_counts)
         return TokenCount(total_input, total_output, total_cost)
 
+    def _cleanup_expired_sessions(self) -> None:
+        """Drop sessions older than the configured TTL to bound memory growth."""
+        if self.session_ttl_hours <= 0:
+            return
+        cutoff = datetime.now() - timedelta(hours=self.session_ttl_hours)
+        expired = [sid for sid, s in self.active_sessions.items() if s.created_at < cutoff]
+        for sid in expired:
+            del self.active_sessions[sid]
+
     def create_chat_session(self, subject: str, initial_title: str = "New Chat",
                              grade: Optional[int] = None) -> str:
         """Create a new chat session and return its ID"""
+        self._cleanup_expired_sessions()
         session = ChatSession(subject=subject, title=initial_title, grade=grade)
         self.active_sessions[session.id] = session
         return session.id
@@ -359,41 +379,6 @@ class GenerationAgent:
                 "raw_response": response
             }
 
-    def _serialize_document(self, doc: Document) -> Dict[str, Any]:
-        """
-        Serialize a Document object into a dictionary format.
-
-        Converts a Document instance into a dictionary representation suitable
-        for JSON serialization or data transfer.
-
-        Args:
-            doc (Document): Document instance to serialize
-
-        Returns:
-            Dict[str, Any]: Dictionary containing:
-                - page_content: The document's main content
-                - metadata: Associated metadata dictionary
-        """
-        return {
-            "page_content": doc.page_content,
-            "metadata": doc.metadata
-        }
-
-    def _serialize_documents(self, docs: List[Document]) -> List[Dict[str, Any]]:
-        """
-        Serialize a list of Document objects into list of dictionaries.
-
-        Maps a collection of Document instances to their dictionary representations
-        for data transfer or storage.
-
-        Args:
-            docs (List[Document]): List of Document instances to serialize
-
-        Returns:
-            List[Dict[str, Any]]: List of serialized document dictionaries
-        """
-        return [self._serialize_document(doc) for doc in docs]
-
     def _redistribute_answer_positions(self, questions: List[Dict]) -> List[Dict]:
         """
         Physically reorder options arrays so correct answers are spread across A/B/C/D.
@@ -537,6 +522,13 @@ class GenerationAgent:
                 - If correct_answer is "B", then incorrect_explanations must have keys "A", "C", "D" only.
                 - If correct_answer is "C", then incorrect_explanations must have keys "A", "B", "D" only.
 
+                LETTER-INDEPENDENCE RULE (critical): Option positions are reshuffled after
+                generation, so the letter labels A/B/C/D are NOT stable. Never reference an option
+                by its letter inside correct_explanations or incorrect_explanations. Do not write
+                "B is correct", "the answer is C", "unlike option A", or "option D is wrong".
+                Refer to options by their content/meaning instead (e.g. "the value 12 is correct
+                because..."). The correct_answer field alone communicates the letter.
+
                 Context: {context}
 
                 Areas to focus on: {areas}
@@ -665,6 +657,9 @@ class GenerationAgent:
             if not context_response.context:
                 return {"error": "No relevant documents found"}
 
+            # Get subject-specific rules before creating the prompt
+            subject_rules = self._get_subject_rules(subject)
+
             prompt = PromptTemplate.from_template("""
                 Generate {num_cards} {difficulty} flashcards based on the following context.
 
@@ -672,6 +667,9 @@ class GenerationAgent:
                 context. You may elaborate on and clarify what the context contains, but do not
                 introduce concepts, facts, examples, or details that do not appear in the context.
                 If something is not in the context, do not include it.
+
+                Subject Rules:
+                {subject_rules}
 
                 FRONT SIDE RULE (critical): The front must be a single, short prompt — one sentence
                 or one clear question, maximum 15 words. It must be instantly scannable. Do NOT write
@@ -727,9 +725,10 @@ class GenerationAgent:
                 "context": _format_docs(context_response.context),
                 "areas": context_response.parsed_answer.get("areas", []),
                 "num_cards": num_cards,
-                "difficulty": difficulty
+                "difficulty": difficulty,
+                "subject_rules": subject_rules,
             })
-            
+
             parsed_response = self._parse_llm_response(str(response))
 
             # Validate flashcards
@@ -746,9 +745,10 @@ class GenerationAgent:
                     "context": _format_docs(context_response.context),
                     "areas": context_response.parsed_answer.get("areas", []),
                     "num_cards": replacement_count,
-                    "difficulty": difficulty
+                    "difficulty": difficulty,
+                    "subject_rules": subject_rules,
                 })
-                
+
                 additional_parsed = self._parse_llm_response(str(additional_response))
                 valid_cards = validation_result["valid_flashcards"] + additional_parsed.get("flashcards", [])
 
@@ -758,8 +758,6 @@ class GenerationAgent:
             for card in valid_cards:
                 card["difficulty"] = difficulty
 
-            subject_rules = self._get_subject_rules(subject)
-            
             self.record_token_usage(
                 f"{_format_docs(context_response.context)}\n{subject_rules}\n{difficulty}",
                 str(parsed_response)
@@ -805,7 +803,7 @@ class GenerationAgent:
             context_response = self.context_agent.query_db(
                 subject=subject,
                 question=question,
-                grade=None,
+                grade=session.grade,
                 unit=None,
                 type_req="chat"
             )
@@ -915,7 +913,7 @@ class GenerationAgent:
                 "token_usage": str(self.get_total_token_usage()),
             }
 
-    def generate_notes(self, subject: str, topic: str, grade: Optional[int] = None, unit: Optional[str] = None) -> Dict[str, Any]:
+    def generate_notes(self, subject: str, topic: str, grade: Optional[int] = None, unit: Optional[str] = None, version: str = "1.0") -> Dict[str, Any]:
         """
         Generate comprehensive study notes with examples and explanations.
 
@@ -1142,6 +1140,15 @@ class GenerationAgent:
             if not all(key in parsed_response for key in required_sections):
                 raise ValueError("Generated notes missing required sections")
 
+            # Content validation (advisory — does not block returning the notes)
+            notes_validation = self.validation_agent.validate_notes(
+                parsed_response, context_response.context
+            )
+            if not notes_validation.get("is_valid", True):
+                self.logger.warning(
+                    f"Notes validation flagged content: {notes_validation.get('reason', '')}"
+                )
+
             # Add enhanced metadata
             parsed_response["metadata"] = {
                 "subject": subject,
@@ -1151,7 +1158,9 @@ class GenerationAgent:
                 "generated_at": datetime.now().isoformat(),
                 "complexity_level": "comprehensive",
                 "estimated_study_time": "45-60 minutes",
-                "version": "1.0"
+                "version": version,
+                "is_valid": notes_validation.get("is_valid", True),
+                "validation_note": notes_validation.get("reason", ""),
             }
 
             self.record_token_usage(
@@ -1334,7 +1343,7 @@ class GenerationAgent:
                 "score": 0,
                 "feedback": "Could not evaluate answer due to system error",
                 "improvement_suggestions": ["Please try again"],
-                "correct_solution": "Unable to provide solution at this time",
+                "correct_solution": ["Unable to provide solution at this time"],
                 "misconceptions": ["Evaluation failed"],
                 "key_points_missed": ["Evaluation failed"],
                 "strengths": ["Evaluation failed"],

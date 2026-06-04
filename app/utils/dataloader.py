@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from dotenv import load_dotenv
 from langchain_community.document_loaders import PyPDFLoader
@@ -7,7 +8,9 @@ from pymilvus import MilvusClient, DataType
 import pytesseract
 from pdf2image import convert_from_path
 
-POPPLER_PATH = r"C:\poppler-24.08.0\Library\bin"
+# Path to Poppler's bin directory (needed by pdf2image on Windows). On Linux/Mac,
+# leave POPPLER_PATH unset so pdf2image uses the system-installed binaries.
+POPPLER_PATH = os.getenv("POPPLER_PATH") or None
 # Minimum average characters per page before we consider a PDF image-based
 OCR_THRESHOLD = 200
 
@@ -105,6 +108,21 @@ class DataLoader:
         pages_text = [pytesseract.image_to_string(img) for img in images]
         return "\n\n".join(pages_text)
 
+    def _source_already_loaded(self, source: str) -> bool:
+        """Return True if any chunk from this source file is already in the collection."""
+        escaped = source.replace("\\", "\\\\").replace('"', '\\"')
+        try:
+            existing = self.client.query(
+                collection_name=COLLECTION_NAME,
+                filter=f'source == "{escaped}"',
+                output_fields=["source"],
+                limit=1,
+            )
+            return len(existing) > 0
+        except Exception:
+            # On query failure, don't block insertion
+            return False
+
     def _insert_chunks(
         self,
         chunks: list[str],
@@ -112,8 +130,12 @@ class DataLoader:
         source: str,
         grade: str = "",
         unit: str = "",
+        skip_if_loaded: bool = True,
     ) -> None:
         if not chunks:
+            return
+        if skip_if_loaded and self._source_already_loaded(source):
+            print(f"  Skipping {source} — already loaded")
             return
         vectors = self.embeddings.embed_documents(chunks)
         data = [
@@ -185,6 +207,8 @@ class DataLoader:
     # ------------------------------------------------------------------
 
     def load_single(self, file_path: str, subject: str, grade: str = "", unit: str = "") -> None:
+        # Explicit re-ingestion: bypass the dedup guard so the caller can force a reload.
         print(f"Loading {file_path} ...")
         chunks = self._split_pdf(file_path)
-        self._insert_chunks(chunks, subject=subject, source=file_path, grade=grade, unit=unit)
+        self._insert_chunks(chunks, subject=subject, source=file_path, grade=grade, unit=unit,
+                            skip_if_loaded=False)
