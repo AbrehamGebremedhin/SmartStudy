@@ -380,17 +380,34 @@ class GenerationAgent:
                 ENGLISH FOCUS: emphasise reading and language skills — reading comprehension and
                 inference, vocabulary (meaning in context, synonyms/antonyms, word formation),
                 and grammar/usage (tenses, subject-verb agreement, conditionals, sentence
-                structure, modifiers, tag questions, punctuation). Do not build content around
-                exercise layouts, word-lists or test-administration material.
+                structure, modifiers, tag questions, punctuation). Test the skill DIRECTLY with
+                concrete language examples (e.g. "Closest in meaning to 'haggard'?", "Correct the
+                subject-verb agreement in this sentence").
+
+                STRICTLY DO NOT create content about how a test works or how to study for it:
+                no exercise layouts, numbered word-lists, answer keys, "column A/B", study
+                acronyms or mnemonics, or any test-administration / test-prep material. Teach the
+                English skill itself, never how the exam is built.
             """
         if s == "sat":
             return """
                 SAT FOCUS (Scholastic Aptitude Test): cover about 80% verbal aptitude and 20%
-                quantitative. Verbal = vocabulary (synonyms, antonyms, word meanings), analogies
-                and word relationships, classification, sentence correction/grammar, reading and
-                verbal reasoning, logical reasoning. Quantitative = arithmetic, percentages,
-                ratios, averages, basic algebra, number properties, data interpretation, basic
-                geometry. Do not cover test-taking strategies or scoring rubrics.
+                quantitative — and test the ACTUAL ability directly, never how the test works.
+                Verbal = vocabulary (synonyms, antonyms, word meanings, words in context),
+                analogies and word relationships, classification (odd-one-out), sentence
+                correction / grammar, reading and verbal reasoning, logical reasoning.
+                Quantitative = arithmetic, percentages, ratios, averages, basic algebra, number
+                properties, data interpretation, basic geometry.
+                GOOD examples: "Synonym closest to PHONEY?", "Most nearly OPPOSITE of ALACRITY?",
+                "Complete the analogy: KEY is to LOCK as ____ is to COMPUTER", "What is 30% of 80?".
+
+                STRICTLY FORBIDDEN (these describe a prep book, not the skills being tested):
+                - study acronyms or mnemonics (e.g. BLANKS, READING, the 4Ps);
+                - essay scoring levels, bands or rubrics (e.g. "characteristics of a Level 6 essay");
+                - lists of "passage types", "question categories" or test sections;
+                - reading-pace advice, time limits, or any description of how the SAT is structured.
+                Never make a card whose answer is a fact ABOUT the exam. Make cards that exercise
+                vocabulary, analogies, grammar, reasoning or maths.
             """
         return ""
 
@@ -576,6 +593,39 @@ class GenerationAgent:
         r'|\b(?-i:[A-D])\s+(?:and|or|nor)\s+(?-i:[A-D])\b',
         re.IGNORECASE,
     )
+
+    # Test-prep / exam-meta artifacts that the SAT/English prep PDFs are full of. Content
+    # matching these describes how the test works or how to study for it rather than the
+    # academic skill, so such MCQs/flashcards are dropped (SAT/English only — phrases like
+    # "steps to solve" are legitimate pedagogy in maths/science).
+    _TEST_PREP_ARTIFACT = re.compile(
+        r'\bpassage evidence\b'
+        r'|\b(?:acronym|mnemonic)\b'
+        r'|\bscoring\s+(?:rubric|guide|level|band)\b'
+        r'|\blevel\s+\d+\s+essay\b'
+        r'|\bessay\s+(?:score|scoring|level|band|rubric)\b'
+        r'|\bpassage\s+types?\b'
+        r'|\bquestion\s+categor(?:y|ies)\b'
+        r'|\btest\s+section'
+        r'|\breading\s+pace\b'
+        r'|\bwords?\s+per\s+minute\b'
+        r'|\bsteps?\s+to\s+(?:solve|solving|approach|tackle|answer)\b'
+        r'|\b(?:test|exam)[\s-]*taking\s+(?:strateg|tip|trick)'
+        r'|\b(?:study|solving|reading)\s+(?:strateg|plan|technique|method)\b'
+        r'|\bhow\s+to\s+(?:study|approach|tackle|read)\b'
+        # flashcard-specific: "in the passage" / "the passage says" always references source
+        # material the student cannot see (flashcards have no passage field)
+        r'|\bin\s+the\s+passage\b'
+        r'|\bthe\s+passage\s+(?:says|states|describes|compares|mentions|refers)\b'
+        r'|\baccording\s+to\s+the\s+passage\b',
+        re.IGNORECASE,
+    )
+
+    def _is_test_prep_artifact(self, subject: str, *texts: str) -> bool:
+        """True if any text looks like exam-meta / test-prep material (SAT/English only)."""
+        if subject.lower() not in ("sat", "english"):
+            return False
+        return any(t and self._TEST_PREP_ARTIFACT.search(str(t)) for t in texts)
 
     def _redistribute_answer_positions(self, questions: List[Dict]) -> List[Dict]:
         """
@@ -865,6 +915,13 @@ class GenerationAgent:
             else:
                 valid_questions = validation_result["valid_mcqs"]
 
+            # Deterministic backstop: drop exam-meta / test-prep questions the prep PDFs leak
+            # (SAT/English only), e.g. "What is passage evidence?" or study-strategy questions.
+            valid_questions = [
+                q for q in valid_questions
+                if not self._is_test_prep_artifact(subject, q.get("topic"), q.get("question"), q.get("passage"))
+            ]
+
             # Redistribute correct answers across A/B/C/D by reordering options arrays
             valid_questions = self._redistribute_answer_positions(valid_questions)
 
@@ -991,10 +1048,29 @@ class GenerationAgent:
                 BACK SIDE: The back may be as detailed as needed — full explanations, derivations,
                 examples, and step-by-step reasoning are all welcome here.
 
+                CARD-FORMAT VARIETY (critical — strictly enforced):
+                Do NOT make more than 2 definition cards ("What does X mean?") per 10 cards.
+                For SAT, distribute {num_cards} cards roughly as follows (scale proportionally):
+                  - 2 vocabulary definitions/meanings
+                  - 2 synonyms ("A synonym for PHONEY?") or antonyms ("Opposite of ALACRITY?")
+                  - 2 analogies (front: "KEY is to LOCK as ____ is to COMPUTER"; back: answer + relationship name)
+                  - 1 classification / odd-one-out (front: "Which does not belong: cat, dog, oak, lion?")
+                  - 1 grammar/usage application (front: "Correct this: 'Each of them have left.'")
+                  - 1 quantitative (front: "What is 30% of 80?"; back: step-by-step)
+                  - remaining: verbal reasoning or reading-inference
+                For English, replace analogies with more grammar/usage and reading-inference cards.
+                Treat these as targets, not hard quotas — vary the actual examples freely.
+
                 DIFFICULTY — {difficulty}:
                 - For STEM: test formulas, derivations, multi-step processes, or conceptual reasoning
                 - For humanities: test analytical frameworks, critical perspectives, or key arguments
                 - Aim to test understanding and application, not rote memorisation
+
+                ONE-WORD-PER-SET RULE: A vocabulary word, proper noun, or named concept may appear
+                as the focus of AT MOST ONE card in the entire set. Before writing each card,
+                check all previous cards. If a word already appeared as the quoted/capitalised
+                target in a previous card — even in a different format (definition, antonym,
+                analogy) — do NOT reuse it; pick a different word entirely.
 
                 DEDUPLICATION RULE (strictly enforced):
                 Before writing each new card, mentally list the concepts already covered by all
@@ -1070,6 +1146,50 @@ class GenerationAgent:
 
             else:
                 valid_cards = validation_result["valid_flashcards"]
+
+            # Deterministic backstop: drop exam-meta / test-prep cards the prep PDFs leak
+            # (SAT/English only), e.g. "What is passage evidence?" or study acronyms.
+            valid_cards = [
+                c for c in valid_cards
+                if not self._is_test_prep_artifact(subject, c.get("front"), c.get("back"), c.get("topic"))
+            ]
+
+            # Semantic-duplicate filter: two cards are duplicates when their normalised fronts
+            # are identical (same words, order-independent) even if the phrasing differs
+            # ("Correct this: …" vs "Correct the error: …" about the same sentence).
+            def _normalise(text: str) -> frozenset:
+                return frozenset(re.sub(r"[^\w]", " ", text.lower()).split())
+
+            # Extract the primary focus word from a flashcard front — the quoted/capitalised
+            # target word being tested. Limits one card per focus word so the same vocabulary
+            # item (e.g. "alacrity") doesn't dominate the set.
+            def _focus_word(front: str) -> Optional[str]:
+                # Single-quoted or double-quoted word
+                m = re.search(r"['\"]([A-Za-z]{4,})['\"]", front)
+                if m:
+                    return m.group(1).lower()
+                # ALL-CAPS word of 4+ letters
+                m = re.search(r"\b([A-Z]{4,})\b", front)
+                if m:
+                    return m.group(1).lower()
+                return None
+
+            seen_fronts: set = set()
+            seen_focus: set = set()
+            deduped: list = []
+            for c in valid_cards:
+                front_text = str(c.get("front", ""))
+                key = _normalise(front_text)
+                focus = _focus_word(front_text)
+                if key in seen_fronts:
+                    continue
+                if focus and focus in seen_focus:
+                    continue
+                seen_fronts.add(key)
+                if focus:
+                    seen_focus.add(focus)
+                deduped.append(c)
+            valid_cards = deduped
 
             for card in valid_cards:
                 card["difficulty"] = difficulty
@@ -1699,10 +1819,10 @@ if __name__ == "__main__":
 
     # # Generate Flashcards
     # flashcards = agent.generate_flashcards(
-    #     subject="chemistry",
+    #     subject="sat",
     #     grade=9,
     #     unit="3",
-    #     num_cards=10
+    #     num_cards=20
     # )
     # print("Flashcards:", json.dumps(flashcards, indent=2, ensure_ascii=False))
 

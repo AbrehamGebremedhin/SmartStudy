@@ -55,10 +55,15 @@ import json
 import mimetypes
 import os
 import re
+import sys
 import time
 import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Ensure Unicode box-drawing chars print on Windows without codec errors.
+if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 import requests
 from bs4 import BeautifulSoup
@@ -66,7 +71,8 @@ from bs4.exceptions import FeatureNotFound
 
 # ── Config ───────────────────────────────────────────────────────────────────
 
-BASE_URL = "https://kehulum.com"
+BASE_URL           = "https://kehulum.com"
+MODEL_EXAMS_BASE   = "https://kehulum.com/ethio-exam/entrance-model-exams"
 
 HEADERS = {
     "User-Agent": (
@@ -137,12 +143,12 @@ SUBJECTS = {
             {"name": "Tigray SAT",               "slug": "tigray-region-scholastic-aptitude-test-205"},
         ],
         "2017": [
-            {"name": "Biology",                  "slug": "biology-215"},
-            {"name": "Chemistry",                "slug": "chemistry-216"},
-            {"name": "English",                  "slug": "english-219"},
-            {"name": "Mathematics",              "slug": "mathematics-218"},
-            {"name": "Physics",                  "slug": "physics-217"},
-            {"name": "Scholastic Aptitude Test", "slug": "scholastic-aptitude-test-214"},
+            {"name": "Biology",                  "slug": "biology-403"},
+            {"name": "Chemistry",                "slug": "chemistry-394"},
+            {"name": "English",                  "slug": "english-402"},
+            {"name": "Mathematics",              "slug": "mathematics-401"},
+            {"name": "Physics",                  "slug": "physics-400"},
+            {"name": "Scholastic Aptitude Test", "slug": "scholastic-aptitude-test-395"},
         ],
     },
     "social": {
@@ -746,6 +752,162 @@ def scrape_exam(stream, year, subject, out_root: Path, max_questions: int | None
     }
 
 
+# ── Model-exam discovery & scraping ─────────────────────────────────────────
+
+def discover_model_exam_subjects(listing_url: str) -> list[dict]:
+    """Crawl the model-exams listing page and return subject categories."""
+    soup = get_soup(listing_url)
+    if not soup:
+        return []
+
+    prefix = "/ethio-exam/entrance-model-exams/"
+    seen, subjects = set(), []
+
+    for a in soup.find_all("a", href=True):
+        path = urllib.parse.urlparse(a["href"]).path
+        if not path.startswith(prefix):
+            continue
+        remainder = path[len(prefix):].strip("/")
+        # Keep only single-level paths (subject slugs, not individual exam links)
+        if not remainder or "/" in remainder:
+            continue
+        if remainder in seen:
+            continue
+        seen.add(remainder)
+        name = clean(a.get_text(" ", strip=True)) or remainder.replace("-", " ").title()
+        subjects.append({"slug": remainder, "name": name})
+
+    return subjects
+
+
+def discover_model_exam_list(subject_url: str) -> list[dict]:
+    """Return individual exams under a subject category page."""
+    soup = get_soup(subject_url)
+    if not soup:
+        return []
+
+    base_path = urllib.parse.urlparse(subject_url).path.rstrip("/") + "/"
+    seen, exams = set(), []
+
+    for a in soup.find_all("a", href=True):
+        path = urllib.parse.urlparse(a["href"]).path
+        if not path.startswith(base_path):
+            continue
+        remainder = path[len(base_path):].strip("/")
+        if not remainder or "/" in remainder:
+            continue
+        if remainder in seen:
+            continue
+        seen.add(remainder)
+        name = clean(a.get_text(" ", strip=True)) or remainder.replace("-", " ").title()
+        exams.append({
+            "slug": remainder,
+            "name": name,
+            "url":  BASE_URL + base_path + remainder,
+        })
+
+    return exams
+
+
+def scrape_model_exam(
+    exam: dict, subject_name: str, out_root: Path,
+    max_questions: int | None = None,
+) -> dict | None:
+    """Scrape a single model exam using the same parser as entrance exams."""
+    exam_url  = exam["url"]
+    exam_slug = exam["slug"]
+    exam_name = exam["name"]
+
+    safe_subj = re.sub(r"[^a-z0-9]+", "_", subject_name.lower()).strip("_")
+    img_dir   = out_root / "images" / f"model_{safe_subj}_{exam_slug}"
+    img_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"    → {exam_name[:55]:55s}", end="", flush=True)
+
+    page1 = get_soup(exam_url)
+    if page1 is None or is_not_found_page(page1):
+        print(" [FAILED]")
+        return None
+
+    answer_cache = {}
+    answer_state = {"enabled": True, "hits": 0, "misses": 0}
+
+    all_qs   = parse_questions(
+        page1, img_dir, out_root,
+        exam_slug=exam_slug, exam_url=exam_url,
+        answer_cache=answer_cache, answer_state=answer_state,
+    )
+    max_page = get_max_page(page1, exam_url)
+    time.sleep(PAGE_DELAY)
+
+    for page in range(2, max_page + 1):
+        page_url = f"{exam_url}/{page}"
+        pg = get_soup(page_url)
+        if pg:
+            all_qs.extend(
+                parse_questions(
+                    pg, img_dir, out_root,
+                    exam_slug=exam_slug, exam_url=page_url,
+                    answer_cache=answer_cache, answer_state=answer_state,
+                )
+            )
+        time.sleep(PAGE_DELAY)
+
+    if max_questions and len(all_qs) > max_questions:
+        all_qs = all_qs[:max_questions]
+
+    n_img_q = sum(1 for q in all_qs if q["Question_image"] or any(c["image"] for c in q["Choices"]))
+    print(f" {len(all_qs):3d} questions  ({n_img_q} with images, {max_page} pages)")
+
+    return {
+        "Subject":  subject_name,
+        "ExamName": exam_name,
+        "Stream":   "model",
+        "Year":     "",
+        "_meta": {
+            "slug":           exam_slug,
+            "url":            exam_url,
+            "question_count": len(all_qs),
+            "image_dir":      str(img_dir.relative_to(out_root)).replace("\\", "/"),
+            "scraped_at":     datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        },
+        "Questions": all_qs,
+    }
+
+
+def run_model_exams(
+    subject_filter=None, out_dir="euee_output",
+    max_questions=None,
+) -> list[dict]:
+    out_root = Path(out_dir)
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    print(f"\n── MODEL EXAMS ──")
+    subjects = discover_model_exam_subjects(MODEL_EXAMS_BASE)
+    if not subjects:
+        print("  [WARN] No model exam subjects discovered.")
+        return []
+
+    if subject_filter:
+        subjects = [s for s in subjects if
+                    subject_filter.lower() in s["name"].lower() or
+                    subject_filter.lower() in s["slug"]]
+
+    all_exams = []
+    for subj in subjects:
+        subject_url = f"{MODEL_EXAMS_BASE}/{subj['slug']}"
+        print(f"\n  {subj['name']}")
+        exams = discover_model_exam_list(subject_url)
+        time.sleep(PAGE_DELAY)
+
+        for exam in exams:
+            result = scrape_model_exam(exam, subj["name"], out_root, max_questions=max_questions)
+            if result:
+                all_exams.append(result)
+
+    return all_exams
+
+
 # ── Output ────────────────────────────────────────────────────────────────────
 
 def save_json(exams: list, path: Path):
@@ -771,7 +933,8 @@ def save_csv(exams: list, path: Path):
             q_img = q.get("Question_image") or {}
             rows.append({
                 "Subject":          exam["Subject"],
-                "Year":             exam["Year"],
+                "ExamName":         exam.get("ExamName", ""),
+                "Year":             exam.get("Year", ""),
                 "Stream":           exam["Stream"],
                 "Number":           q["Number"],
                 "Question":         q["Question"],
@@ -803,36 +966,49 @@ def save_csv(exams: list, path: Path):
 # ── Runner ────────────────────────────────────────────────────────────────────
 
 def run(streams=None, years=None, subject_filter=None,
-    out_dir="euee_output", do_csv=True, max_questions=None):
-
+    out_dir="euee_output", do_csv=True, max_questions=None,
+    mode="both"):
+    """
+    mode: "entrance" | "model" | "both"
+    """
     out_root = Path(out_dir)
     out_root.mkdir(parents=True, exist_ok=True)
 
-    streams   = streams or list(SUBJECTS.keys())
     all_exams = []
     total_q   = 0
 
-    for stream in streams:
-        target_years = years or list(SUBJECTS[stream].keys())
-        for year in target_years:
-            subjects = SUBJECTS[stream].get(year, [])
-            if not subjects:
-                print(f"[WARN] No subjects catalogued for {stream}/{year}")
-                continue
+    if mode in ("entrance", "both"):
+        target_streams = streams or list(SUBJECTS.keys())
+        for stream in target_streams:
+            target_years = years or list(SUBJECTS[stream].keys())
+            for year in target_years:
+                subjects = SUBJECTS[stream].get(year, [])
+                if not subjects:
+                    print(f"[WARN] No subjects catalogued for {stream}/{year}")
+                    continue
 
-            if subject_filter:
-                subjects = [
-                    s for s in subjects
-                    if subject_filter.lower() in s["name"].lower()
-                    or subject_filter.lower() in s["slug"]
-                ]
+                if subject_filter:
+                    subjects = [
+                        s for s in subjects
+                        if subject_filter.lower() in s["name"].lower()
+                        or subject_filter.lower() in s["slug"]
+                    ]
 
-            print(f"\n── {stream.upper()} SCIENCE  {year} E.C ──")
-            for subj in subjects:
-                result = scrape_exam(stream, year, subj, out_root, max_questions=max_questions)
-                if result:
-                    all_exams.append(result)
-                    total_q += result["_meta"]["question_count"]
+                print(f"\n── {stream.upper()} SCIENCE  {year} E.C ──")
+                for subj in subjects:
+                    result = scrape_exam(stream, year, subj, out_root, max_questions=max_questions)
+                    if result:
+                        all_exams.append(result)
+                        total_q += result["_meta"]["question_count"]
+
+    if mode in ("model", "both"):
+        model_exams = run_model_exams(
+            subject_filter=subject_filter,
+            out_dir=out_dir,
+            max_questions=max_questions,
+        )
+        all_exams.extend(model_exams)
+        total_q += sum(e["_meta"]["question_count"] for e in model_exams)
 
     ts        = datetime.now().strftime("%Y%m%d_%H%M%S")
     json_path = out_root / f"euee_{ts}.json"
@@ -857,9 +1033,11 @@ def main():
         epilog=__doc__,
     )
     parser.add_argument("--stream",  choices=["natural", "social"],
-                        help="Stream to scrape (default: both)")
-    parser.add_argument("--year",    help="E.C year, e.g. 2016 (default: all)")
+                        help="Stream to scrape (default: both); ignored for model exams")
+    parser.add_argument("--year",    help="E.C year, e.g. 2016 (default: all); entrance exams only")
     parser.add_argument("--subject", help="Subject filter, e.g. physics")
+    parser.add_argument("--mode",    choices=["entrance", "model", "both"], default="both",
+                        help="What to scrape: entrance exams, model exams, or both (default: both)")
     parser.add_argument("--out",     default="euee_output",
                         help="Output directory (default: euee_output/)")
     parser.add_argument("--no-csv",  action="store_true",
@@ -875,6 +1053,7 @@ def main():
         out_dir        = args.out,
         do_csv         = not args.no_csv,
         max_questions  = args.max_questions,
+        mode           = args.mode,
     )
 
 

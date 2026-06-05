@@ -208,9 +208,12 @@ class ValidationAgent:
             vocabulary, analogy, grammar and reasoning cards may use their own wording as long as
             they stay within the subject's level and topics.
 
-            Mark a card INVALID only if it is off-topic for the subject, factually wrong, or tests
-            test-administration / test-prep material (scoring rubrics, marking schemes, study
-            strategies, exam logistics) rather than an academic skill.
+            Mark a card INVALID if it is off-topic for the subject, factually wrong, or — instead
+            of teaching an academic skill — describes how a test works or how to study for it.
+            This includes study acronyms or mnemonics (BLANKS, READING, 4Ps), essay scoring
+            levels/bands/rubrics ("characteristics of a Level 6 essay"), lists of passage types
+            or question categories, test-section breakdowns, reading-pace advice, marking schemes,
+            and exam logistics. A card whose answer is a fact ABOUT the exam is INVALID.
 
             Context: {context}
             Focus Areas: {areas}
