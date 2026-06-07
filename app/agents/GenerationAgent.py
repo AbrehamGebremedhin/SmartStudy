@@ -1,143 +1,38 @@
-import os
-import re
-import functools
-import random
-import time
-import threading
-from typing import Dict, Any, Optional, List
-from dotenv import load_dotenv
-from langchain_deepseek import ChatDeepSeek
-from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
-from langchain_core.prompts import PromptTemplate
-from langchain_core.documents import Document
 import json
 import logging
+import os
+import re
+from datetime import datetime
+from typing import Any, Dict, Optional
+
+import tiktoken
+from dotenv import load_dotenv
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import PromptTemplate
+from langchain_deepseek import ChatDeepSeek
+
 from ContextRefinementAgent import ContextRefinementAgent
 from ValidationAgent import ValidationAgent
-from datetime import datetime, timedelta
-import uuid
-from dataclasses import dataclass, field
-import tiktoken
-
-
-def _format_docs(context) -> str:
-    if isinstance(context, list):
-        return "\n\n".join(
-            doc.page_content if isinstance(doc, Document) else str(doc)
-            for doc in context
-        )
-    return str(context)
-
-@dataclass
-class ChatMessage:
-    role: str  # 'user' or 'assistant'
-    content: str
-    timestamp: datetime = field(default_factory=datetime.now)
-    key_concepts: List[str] = field(default_factory=list)
-
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {
-            "role": self.role,
-            "message": self.content,
-            "timestamp": self.timestamp.isoformat(),
-        }
-        if self.role == "assistant" and self.key_concepts:
-            d["key_concepts"] = self.key_concepts
-        return d
-
-@dataclass
-class ChatSession:
-    id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    title: str = ""
-    messages: List[ChatMessage] = field(default_factory=list)
-    created_at: datetime = field(default_factory=datetime.now)
-    subject: str = ""
-    grade: Optional[int] = None
-
-    def add_message(self, role: str, content: str, key_concepts: Optional[List[str]] = None):
-        self.messages.append(ChatMessage(
-            role=role,
-            content=content,
-            key_concepts=key_concepts or [],
-        ))
-
-    def get_recent_context(self, max_messages: int = 10) -> str:
-        """Return the last N messages formatted for the LLM.
-
-        Callers must invoke this BEFORE appending the current user question to the
-        session, so every message already stored here is prior context (the last one
-        being the previous assistant reply). No trailing slice is needed.
-        """
-        recent = self.messages[-max_messages:] if len(self.messages) > max_messages else self.messages
-        return "\n".join(f"{m.role}: {m.content}" for m in recent)
-
-    def get_history_as_list(self) -> List[Dict[str, Any]]:
-        return [m.to_dict() for m in self.messages]
+from models import ChatSession, TokenCount
+from mcq_utils import is_test_prep_artifact, redistribute_answer_positions
+from session_manager import SessionManager
+from subject_rules import (
+    STEM_SUBJECTS,
+    get_grounding_rule,
+    get_mcq_subject_guidance,
+    get_subject_focus,
+    get_subject_rules,
+    presentation_rules,
+)
+from utils import clean_unicode, format_docs, parse_llm_response, retry_on_none
 
 load_dotenv("./.env")
 
-def retry_on_none(max_retries=3):
-    """
-    Decorator that retries a function if it returns None.
-
-    Provides automatic retry functionality for functions that might fail temporarily.
-    Useful for handling transient failures in API calls or resource access.
-
-    Args:
-        max_retries (int): Maximum number of retry attempts before failing
-
-    Returns:
-        Callable: Decorated function that implements retry logic
-
-    Raises:
-        ValueError: If no valid response is received after max retries
-        
-    Notes:
-        - Waits with exponential backoff (2 ** attempt seconds) between retries
-        - Stops retrying if function returns non-None value
-        - Useful for functions with potential transient failures
-    """
-    def decorator_retry(func):
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            for attempt in range(max_retries):
-                result = func(*args, **kwargs)
-                if result is not None:
-                    return result
-                # Back off before the next attempt (skip the wait after the final try)
-                if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)
-            raise ValueError(f"Failed to get a valid response after {max_retries} attempts")
-        return wrapper
-    return decorator_retry
-
-@dataclass
-class TokenCount:
-    input_tokens: int
-    output_tokens: int
-    total_cost: float
-
-    def __str__(self):
-        return f"Input tokens: {self.input_tokens}\nOutput tokens: {self.output_tokens}\nTotal tokens: {self.input_tokens + self.output_tokens}\nEstimated cost: ${self.total_cost:.4f}"
 
 class GenerationAgent:
-    """
-    A class responsible for generating various types of educational content.
-    
-    This agent handles the generation of MCQs, flashcards, chat responses, and detailed 
-    study notes using LLM. It includes validation, context refinement, and error handling.
-
-    Attributes:
-        logger: Logging instance for tracking operations
-        llm: Instance of ChatGoogleGenerativeAI for content generation
-        context_agent: Instance of ContextRefinementAgent
-        validation_agent: Instance of ValidationAgent
-        stem_subjects: List of STEM subject identifiers
-        humanities_subjects: List of humanities subject identifiers
-    """
+    """Generates MCQs, flashcards, chat responses, and study notes using an LLM."""
 
     def __init__(self):
-        """Initialize the GenerationAgent with required components"""
         load_dotenv("./.env")
         self.logger = logging.getLogger(__name__)
 
@@ -146,570 +41,48 @@ class GenerationAgent:
             raise ValueError("DEEPSEEK_API_KEY not found in environment")
 
         self.llm = ChatDeepSeek(model="deepseek-v4-flash", api_key=api_key)
-        # JSON mode — forces DeepSeek to always return valid JSON
         self._json_llm = self.llm.bind(response_format={"type": "json_object"})
         self.context_agent = ContextRefinementAgent()
         self.validation_agent = ValidationAgent()
-        self.stem_subjects = ["maths", "physics", "chemistry", "biology", "economics"]
-        self.humanities_subjects = ["english", "history", "geography", "civics", "general_business"]
-        self.active_sessions: Dict[str, ChatSession] = {}
-        self._sessions_lock = threading.Lock()
-        # Sessions older than this are dropped on the next create to bound memory growth
-        self.session_ttl_hours = float(os.getenv("CHAT_SESSION_TTL_HOURS", "24"))
-        # NOTE: tiktoken's gpt-3.5-turbo encoding is an APPROXIMATION for DeepSeek, which
-        # uses a different tokenizer. Token counts and cost estimates are indicative only.
-        self.token_counter = tiktoken.encoding_for_model("gpt-3.5-turbo")
+        self.sessions = SessionManager()
+        # NOTE: tiktoken's gpt-3.5-turbo encoding is an approximation for DeepSeek.
+        # Token counts and cost estimates are indicative only.
+        self._token_encoder = tiktoken.encoding_for_model("gpt-3.5-turbo")
         self.COST_PER_1M_INPUT = 0.14   # DeepSeek-V4-Flash
         self.COST_PER_1M_OUTPUT = 0.28  # DeepSeek-V4-Flash
 
-    def count_tokens(self, text: str) -> int:
-        """Count tokens in a text string"""
-        return len(self.token_counter.encode(str(text)))
+    # ------------------------------------------------------------------
+    # Token accounting
+    # ------------------------------------------------------------------
 
-    def record_token_usage(self, input_text: str, output_text: str) -> TokenCount:
-        """Return per-call token usage; does not accumulate across requests."""
-        input_tokens = self.count_tokens(input_text)
-        output_tokens = self.count_tokens(output_text)
-        cost = (
-            (input_tokens * self.COST_PER_1M_INPUT / 1_000_000) +
-            (output_tokens * self.COST_PER_1M_OUTPUT / 1_000_000)
-        )
-        return TokenCount(input_tokens, output_tokens, cost)
+    def _count_tokens(self, text: str) -> int:
+        return len(self._token_encoder.encode(str(text)))
 
-    def _cleanup_expired_sessions(self) -> None:
-        """Drop sessions older than the configured TTL to bound memory growth."""
-        if self.session_ttl_hours <= 0:
-            return
-        cutoff = datetime.now() - timedelta(hours=self.session_ttl_hours)
-        with self._sessions_lock:
-            expired = [sid for sid, s in self.active_sessions.items() if s.created_at < cutoff]
-            for sid in expired:
-                del self.active_sessions[sid]
+    def _record_token_usage(self, input_text: str, output_text: str) -> TokenCount:
+        inp = self._count_tokens(input_text)
+        out = self._count_tokens(output_text)
+        cost = (inp * self.COST_PER_1M_INPUT + out * self.COST_PER_1M_OUTPUT) / 1_000_000
+        return TokenCount(inp, out, cost)
+
+    # ------------------------------------------------------------------
+    # Session management (thin delegation to SessionManager)
+    # ------------------------------------------------------------------
 
     def create_chat_session(self, subject: str, initial_title: str = "New Chat",
-                             grade: Optional[int] = None) -> str:
-        """Create a new chat session and return its ID"""
-        self._cleanup_expired_sessions()
-        session = ChatSession(subject=subject, title=initial_title, grade=grade)
-        with self._sessions_lock:
-            self.active_sessions[session.id] = session
-        return session.id
+                            grade: Optional[int] = None) -> str:
+        return self.sessions.create(subject, title=initial_title, grade=grade)
 
     def get_chat_session(self, session_id: str) -> Optional[ChatSession]:
-        """Retrieve a chat session by ID"""
-        with self._sessions_lock:
-            return self.active_sessions.get(session_id)
+        return self.sessions.get(session_id)
 
     def update_session_title(self, session_id: str, new_title: str) -> bool:
-        """Update the title of a chat session"""
-        with self._sessions_lock:
-            if session := self.active_sessions.get(session_id):
-                session.title = new_title
-                return True
-        return False
+        return self.sessions.update_title(session_id, new_title)
 
-    def _get_subject_rules(self, subject: str) -> str:
-        """
-        Get subject-specific rules for content generation.
-
-        Args:
-            subject (str): The subject identifier
-
-        Returns:
-            str: Specific rules and guidelines for the given subject
-        """
-        if subject.lower() == "biology":
-            return """
-                - The questions with workout questions should contain workout steps
-                - Use ^ in place of superscript and _ in place of subscript
-                - Include step-by-step solutions where applicable
-                BIOCHEMICAL ACCURACY RULES (apply to ALL explanations, not just the answer):
-                - Electron transport chain: Complexes I, III, and IV pump protons across the inner
-                  mitochondrial membrane. Complex II does NOT pump protons — never state otherwise.
-                - Cofactor directionality: always name the cofactor as it exists at the START of
-                  the reaction. Catabolic (oxidation) reactions consume NADH and produce NAD+;
-                  do not write "NAD+ is used" for a reaction that oxidises NADH.
-                - Phosphate transfer: direct phosphate transfer DOES occur in substrate-level
-                  phosphorylation and coupled reactions (e.g., creatine kinase). Never write
-                  "direct phosphate transfer does not occur" for these reactions.
-                - When writing incorrect_explanations, verify that the reason given for an option
-                  being wrong is itself biochemically accurate. A wrong-option explanation must
-                  not teach incorrect biology while trying to dismiss the wrong choice.
-            """
-        if subject.lower() in self.stem_subjects:
-            return """
-                - The questions with workout questions should contain workout steps
-                - Use ^ in place of superscript and _ in place of subscript
-                - Include step-by-step solutions where applicable
-            """
-        elif subject.lower() in self.humanities_subjects:
-            return """
-                - No essay or paragraph-based questions
-                - Focus on clear, concise factual questions
-                - Include relevant historical/contextual references
-            """
-        elif subject.lower() == "sat":
-            return """
-                - Scholastic Aptitude Test: about 80% verbal reasoning, 20% quantitative/maths
-                - Verbal: analogies, synonyms, antonyms, word substitution, classification,
-                  sentence correction, reading comprehension, logical reasoning
-                - Quantitative: arithmetic, percentages, ratios, averages, basic algebra,
-                  number properties, data interpretation, basic geometry (with workout steps)
-                - Never generate questions about test-taking strategies or scoring rubrics
-            """
-        return "- General format rules apply"  # Default rules
-
-    def _get_mcq_subject_guidance(self, subject: str) -> str:
-        """
-        Extra MCQ-only guidance modelled on the actual EUEE exam format.
-
-        English and SAT target the Ethiopian University Entrance Exam. English is
-        reading-comprehension heavy; the "SAT" is mostly verbal aptitude (analogies,
-        synonyms, antonyms, etc.) with about 20% quantitative/maths reasoning mixed in.
-        Questions must be SELF-CONTAINED (answerable from the stem plus any embedded
-        `passage`) and must never point at the retrieval context the student cannot see.
-        Returns "" for other subjects.
-        """
-        s = subject.lower()
-        if s == "english":
-            return """
-                ENGLISH = EUEE ENGLISH (READING-COMPREHENSION HEAVY):
-                Target mix: about 75% reading-based questions and 25% grammar/usage questions.
-
-                READING-BASED QUESTIONS (the majority — roughly 3 of every 4):
-                - Each MUST include a SHORT self-contained passage (4-8 sentences) in the
-                  `passage` field, then ask ONE question about it. Vary the type across the set:
-                  * Main idea / true-according-to-passage: "Which statement is true according to
-                    the passage?" or "What is the main idea of the passage?"
-                  * Inference: what the passage implies but does not state outright.
-                  * Reference: "What does the word 'there'/'it'/'they'/'this' refer to in the
-                    passage?" (the referenced word must actually appear in the passage).
-                  * Vocabulary-in-context: "Which is closest in meaning to 'haggard' as used in
-                    the passage?" — the target word MUST appear verbatim in the passage.
-                - You write the passage yourself; make it coherent and self-contained. It need
-                  not be copied from the source. Several reading questions may not share a passage
-                  unless you intend them to — each carries its own passage.
-
-                GRAMMAR / USAGE QUESTIONS (the minority — roughly 1 of every 4, passage = null):
-                - Put a complete example sentence in the stem and test tense, subject-verb
-                  agreement, conditionals, tag questions, sentence structure, modifiers,
-                  prepositions, etc. Each option is a full candidate sentence or phrase.
-                  e.g. "Which sentence correctly uses the present perfect tense?"
-
-                FORBIDDEN: memorised lists, exercise layouts, "column A/B", answer keys, or any
-                test-administration fact. Never reference material the student cannot see.
-            """
-        if s == "sat":
-            return """
-                SAT = SCHOLASTIC APTITUDE TEST (~80% VERBAL REASONING + ~20% QUANTITATIVE):
-                Target mix per set: about 4 of every 5 questions VERBAL aptitude, and about
-                1 of every 5 questions QUANTITATIVE/MATH reasoning. Each is a standalone
-                4-option question; vary the types across the set.
-
-                VERBAL APTITUDE (~80%, the majority):
-                - Analogy: "KEY is to LOCK as ____ is to COMPUTER" (options complete the same
-                  relationship, e.g. PASSWORD). Name the relationship in the explanation.
-                - Synonym: "Which word is closest in meaning to PHONEY?" (e.g. Fake).
-                - Antonym: "Which word is most nearly OPPOSITE in meaning to <word>?".
-                - Word substitution: give a short definition/phrase, ask for the single word
-                  that means it.
-                - Classification (odd-one-out): four items where three share a category and one
-                  does not; ask which does NOT belong.
-                - Sentence correction: present a sentence and ask which version is grammatically
-                  correct, or which underlined part contains the error.
-                - Reading comprehension: include a SHORT self-contained passage (4-8 sentences)
-                  in the `passage` field, then ask a main-idea, inference, reference, or
-                  vocabulary-in-context question about it.
-                - Analytical / logical reasoning: a short self-contained deduction or logic
-                  puzzle answerable from the stem alone.
-
-                QUANTITATIVE / MATH (~20%, roughly 1 in every 5 questions):
-                - SAT-style problem solving: arithmetic, percentages, ratios and proportions,
-                  averages, basic algebra (linear/quadratic), number properties, simple data
-                  interpretation, and basic geometry.
-                - Put the ENTIRE problem in the question stem (passage = null), keep it
-                  self-contained, and provide a clear step-by-step solution in `workout_steps`.
-                  Use ^ for superscript and _ for subscript (e.g. x^2).
-
-                STRICTLY FORBIDDEN for SAT:
-                - US-style two-blank sentence completion.
-                - Questions ABOUT test-taking strategies, study methods, reading pace, scoring
-                  rubrics, or exam format (e.g. "the 4Ps strategy", "the BLANKS strategy",
-                  "passage evidence"). Those describe a prep book, not the exam. Test ability
-                  directly.
-            """
-        return ""
-
-    def _get_grounding_rule(self, subject: str) -> str:
-        """
-        How tightly generated content must hug the retrieved source text.
-
-        English/SAT are aptitude exams: analogies, synonyms and reading passages cannot be
-        "quoted" from a grammar reference, so strict grounding is wrong for them — the source
-        is used to calibrate vocabulary and difficulty, not to copy from. All other subjects
-        keep strict grounding so curriculum content stays inside the provided material. The
-        rule is phrased format-neutrally so it can be reused by MCQs, flashcards, notes, chat
-        and answer evaluation alike.
-        """
-        if subject.lower() in ("sat", "english"):
-            return """
-                GROUNDING RULE (calibration): Use the provided context to calibrate the
-                vocabulary level, topics, and difficulty to what a student at this level studies.
-                You do NOT need to quote or copy the context: aptitude content (analogies,
-                synonyms, antonyms, classification, reasoning, reading passages, basic maths) may
-                use appropriate general vocabulary, examples and relationships rather than being
-                lifted from the source. Stay within the kind of language and topics the context
-                represents; do not drift into unrelated specialist material.
-            """
-        return """
-                CONTEXT GROUNDING RULE: Every piece of generated content must be drawn
-                exclusively from the provided context. You may elaborate on and clarify what the
-                context contains, but do not introduce concepts, facts, examples, or details that
-                do not appear in the context. If something is not in the context, do not include it.
-            """
-
-    def _get_subject_focus(self, subject: str) -> str:
-        """
-        Format-neutral description of WHAT English/SAT content should cover, reused by
-        flashcards and notes (MCQs have their own, format-specific guidance). Returns "" for
-        subjects that need no special steering.
-        """
-        s = subject.lower()
-        if s == "english":
-            return """
-                ENGLISH FOCUS: emphasise reading and language skills — reading comprehension and
-                inference, vocabulary (meaning in context, synonyms/antonyms, word formation),
-                and grammar/usage (tenses, subject-verb agreement, conditionals, sentence
-                structure, modifiers, tag questions, punctuation). Test the skill DIRECTLY with
-                concrete language examples (e.g. "Closest in meaning to 'haggard'?", "Correct the
-                subject-verb agreement in this sentence").
-
-                STRICTLY DO NOT create content about how a test works or how to study for it:
-                no exercise layouts, numbered word-lists, answer keys, "column A/B", study
-                acronyms or mnemonics, or any test-administration / test-prep material. Teach the
-                English skill itself, never how the exam is built.
-            """
-        if s == "sat":
-            return """
-                SAT FOCUS (Scholastic Aptitude Test): cover about 80% verbal aptitude and 20%
-                quantitative — and test the ACTUAL ability directly, never how the test works.
-                Verbal = vocabulary (synonyms, antonyms, word meanings, words in context),
-                analogies and word relationships, classification (odd-one-out), sentence
-                correction / grammar, reading and verbal reasoning, logical reasoning.
-                Quantitative = arithmetic, percentages, ratios, averages, basic algebra, number
-                properties, data interpretation, basic geometry.
-                GOOD examples: "Synonym closest to PHONEY?", "Most nearly OPPOSITE of ALACRITY?",
-                "Complete the analogy: KEY is to LOCK as ____ is to COMPUTER", "What is 30% of 80?".
-
-                STRICTLY FORBIDDEN (these describe a prep book, not the skills being tested):
-                - study acronyms or mnemonics (e.g. BLANKS, READING, the 4Ps);
-                - essay scoring levels, bands or rubrics (e.g. "characteristics of a Level 6 essay");
-                - lists of "passage types", "question categories" or test sections;
-                - reading-pace advice, time limits, or any description of how the SAT is structured.
-                Never make a card whose answer is a fact ABOUT the exam. Make cards that exercise
-                vocabulary, analogies, grammar, reasoning or maths.
-            """
-        return ""
-
-    def _presentation_rules(self) -> str:
-        """
-        Shared no-meta-reference / no-administration-trivia rules for student-facing generated
-        content (flashcards, notes). Chat and answer evaluation already address the student
-        directly and carry their own equivalent rules.
-        """
-        return """
-                PRESENTATION RULES:
-                - The student sees only this material, never the retrieval source. Never write
-                  "according to the context", "based on the passage/source", "as the table / list
-                  / exercise shows", and never cite exercise numbers, columns, page numbers or
-                  answer keys.
-                - Never include test-administration or test-prep material — scoring rubrics,
-                  marking schemes, band/level descriptors, study strategies, reading-pace advice,
-                  time/word/file limits. Teach the academic knowledge and skills only.
-            """
-
-    def _clean_unicode(self, text: str) -> str:
-        """
-        Clean and normalize Unicode characters in text.
-
-        Args:
-            text (str): Text containing Unicode characters
-
-        Returns:
-            str: Cleaned text with standardized characters
-        """
-        if not isinstance(text, str):
-            return text
-            
-        replacements = {
-            # Superscript numbers
-            '\u00b2': '^2',    # ²
-            '\u00b3': '^3',    # ³
-            '\u2070': '^0',    # ⁰
-            '\u00b9': '^1',    # ¹
-            '\u2074': '^4',    # ⁴
-            '\u2075': '^5',    # ⁵
-            '\u2076': '^6',    # ⁶
-            '\u2077': '^7',    # ⁷
-            '\u2078': '^8',    # ⁸
-            '\u2079': '^9',    # ⁹
-            # Superscript operators
-            '\u207a': '^+',    # ⁺
-            '\u207b': '^-',    # ⁻
-            '\u207c': '^=',    # ⁼
-            '\u207d': '^(',    # ⁽
-            '\u207e': '^)',    # ⁾
-            # Mathematical symbols
-            '\u2013': '-',     # –
-            '\u2014': '--',    # —
-            '\u2212': '-',     # −
-            '\u00d7': 'x',     # ×
-            '\u00f7': '/',     # ÷
-            '\u00b1': '+-',    # ±
-            '\u221a': 'sqrt',  # √
-            '\u221e': 'inf',   # ∞
-            '\u2248': '~=',    # ≈
-            '\u2260': '!=',    # ≠
-            '\u2264': '<=',    # ≤
-            '\u2265': '>=',    # ≥
-            # Greek letters
-            '\u03b1': 'alpha',  # α
-            '\u03b2': 'beta',   # β
-            '\u03b3': 'gamma',  # γ
-            '\u03c0': 'pi',     # π
-            '\u03bc': 'mu',     # μ
-            # Quotes and formatting
-            '\u2018': "'",     # '
-            '\u2019': "'",     # '
-            '\u201c': '"',     # "
-            '\u201d': '"',     # "
-            '\u2022': '*',     # •
-            '\n': '\\n',       # newline
-        }
-        
-        result = text
-        for unicode_char, replacement in replacements.items():
-            result = result.replace(unicode_char, replacement)
-        return result
-
-    def _parse_llm_response(self, response: str) -> Dict[str, Any]:
-        """
-        Parse and validate LLM response into structured format.
-
-        Args:
-            response (str): Raw LLM response string
-
-        Returns:
-            Dict[str, Any]: Parsed and validated response structure
-        """
-        try:
-            cleaned_response = response.strip()
-            # Strip any markdown code fences the model may have added
-            if cleaned_response.startswith("```"):
-                cleaned_response = cleaned_response.split("```")[1]
-                if cleaned_response.startswith("json"):
-                    cleaned_response = cleaned_response[4:]
-                cleaned_response = cleaned_response.strip()
-            # Extract the outermost JSON object if the model added surrounding text
-            start_idx = cleaned_response.find('{')
-            end_idx = cleaned_response.rfind('}') + 1
-            if start_idx != -1 and end_idx > start_idx:
-                cleaned_response = cleaned_response[start_idx:end_idx]
-
-            parsed = json.loads(cleaned_response)
-            
-            # Clean Unicode in response text if present
-            if isinstance(parsed, dict):
-                if "response" in parsed:
-                    if isinstance(parsed["response"], dict):
-                        parsed["response"]["response"] = self._clean_unicode(parsed["response"]["response"])
-                    else:
-                        parsed["response"] = self._clean_unicode(str(parsed["response"]))
-            
-            # For chat responses, don't check for questions/flashcards structure
-            if "response" in parsed or "key_concepts" in parsed:
-                return parsed
-                
-            # For MCQs/flashcards, ensure expected structure
-            if "questions" not in parsed and "flashcards" not in parsed:
-                return {
-                    "error": "Invalid response format",
-                    "raw_response": cleaned_response
-                }
-            
-            return parsed
-
-        except json.JSONDecodeError as e:
-            self.logger.error(f"Failed to parse JSON response: {str(e)}")
-            return {
-                "error": f"Failed to parse response: {str(e)}",
-                "raw_response": response
-            }
-
-    # Contexts in which a bare capital letter A-D denotes an answer option, so it must be
-    # remapped when answer positions are reshuffled. In every alternative the option letter
-    # is the final captured character of the match (lookaheads do not consume), which lets
-    # the swap simply replace the last character.
-    _LETTER_REF_PATTERN = re.compile(
-        r'(?:option|options|choice|choices|answer|meaning|sentence|version|statement|letter)\s+([A-D])\b'
-        r'|\b(?:answer|correct\s+answer)\s+is\s+([A-D])\b'
-        r'|\b(?:only|both|neither|either)\s+([A-D])\b'
-        r'|(?:Thus|Hence|Therefore|So),?\s+([A-D])\b'
-        r'|\b([A-D])(?=\s+(?:is|are|was|were)\s+(?:correct|incorrect|right|wrong|the\b))'
-        r'|\b([A-D])(?=\s+corrects?\b)',
-        re.IGNORECASE,
-    )
-
-    def _swap_letter_refs(self, text: str, letter_a: str, letter_b: str) -> str:
-        """
-        Swap option-letter references between letter_a and letter_b in explanation text.
-
-        The model frequently labels options by letter ("Thus B is correct", "meaning A",
-        "the correct answer is C") despite being told not to. After answer positions are
-        reshuffled those references go stale, so this rewrites them in sync with the swap.
-        A null-byte sentinel marks already-swapped letters so a single pass can transpose
-        both directions without re-swapping.
-        """
-        if not text or letter_a == letter_b:
-            return text
-        sentinel = {letter_a: f"\x00{letter_a}\x00", letter_b: f"\x00{letter_b}\x00"}
-
-        def replace(m: re.Match) -> str:
-            letter = next(g for g in m.groups() if g is not None)
-            if letter in (letter_a, letter_b):
-                other = letter_b if letter == letter_a else letter_a
-                return m.group(0)[:-1] + sentinel[other]  # last char is the option letter
-            return m.group(0)
-
-        swapped = self._LETTER_REF_PATTERN.sub(replace, text)
-        return swapped.replace(sentinel[letter_a], letter_a).replace(sentinel[letter_b], letter_b)
-
-    # Options whose text refers to other options by letter ("Both A and B", "Neither A nor
-    # C", "All/None of the above") cannot be reshuffled without becoming wrong, so questions
-    # containing them are left in place.
-    _SELF_REF_OPTION = re.compile(
-        r'\b(?:both|neither|either|options?|choices?)\b.*\b(?-i:[A-D])\b'
-        r'|\b(?:all|none)\s+of\s+the\s+above\b'
-        r'|\b(?-i:[A-D])\s+(?:and|or|nor)\s+(?-i:[A-D])\b',
-        re.IGNORECASE,
-    )
-
-    # Test-prep / exam-meta artifacts that the SAT/English prep PDFs are full of. Content
-    # matching these describes how the test works or how to study for it rather than the
-    # academic skill, so such MCQs/flashcards are dropped (SAT/English only — phrases like
-    # "steps to solve" are legitimate pedagogy in maths/science).
-    _TEST_PREP_ARTIFACT = re.compile(
-        r'\bpassage evidence\b'
-        r'|\b(?:acronym|mnemonic)\b'
-        r'|\bscoring\s+(?:rubric|guide|level|band)\b'
-        r'|\blevel\s+\d+\s+essay\b'
-        r'|\bessay\s+(?:score|scoring|level|band|rubric)\b'
-        r'|\bpassage\s+types?\b'
-        r'|\bquestion\s+categor(?:y|ies)\b'
-        r'|\btest\s+section'
-        r'|\breading\s+pace\b'
-        r'|\bwords?\s+per\s+minute\b'
-        r'|\bsteps?\s+to\s+(?:solve|solving|approach|tackle|answer)\b'
-        r'|\b(?:test|exam)[\s-]*taking\s+(?:strateg|tip|trick)'
-        r'|\b(?:study|solving|reading)\s+(?:strateg|plan|technique|method)\b'
-        r'|\bhow\s+to\s+(?:study|approach|tackle|read)\b'
-        # flashcard-specific: "in the passage" / "the passage says" always references source
-        # material the student cannot see (flashcards have no passage field)
-        r'|\bin\s+the\s+passage\b'
-        r'|\bthe\s+passage\s+(?:says|states|describes|compares|mentions|refers)\b'
-        r'|\baccording\s+to\s+the\s+passage\b',
-        re.IGNORECASE,
-    )
-
-    def _is_test_prep_artifact(self, subject: str, *texts: str) -> bool:
-        """True if any text looks like exam-meta / test-prep material (SAT/English only)."""
-        if subject.lower() not in ("sat", "english"):
-            return False
-        return any(t and self._TEST_PREP_ARTIFACT.search(str(t)) for t in texts)
-
-    def _redistribute_answer_positions(self, questions: List[Dict]) -> List[Dict]:
-        """
-        Physically reorder options arrays so correct answers are spread across A/B/C/D.
-        Content is never changed — only which letter label the correct option receives.
-        """
-        n = len(questions)
-        if n == 0:
-            return questions
-
-        # Build a balanced target sequence: equal counts of A B C D, shuffled
-        base = n // 4
-        targets = []
-        for letter in ["A", "B", "C", "D"]:
-            targets.extend([letter] * base)
-        # Distribute the up-to-3 remainder
-        for letter in ["A", "B", "C", "D"][: n % 4]:
-            targets.append(letter)
-        random.shuffle(targets)
-
-        result = []
-        for q, target in zip(questions, targets):
-            current = q.get("correct_answer", "A")
-            if current == target:
-                result.append(q)
-                continue
-
-            options = list(q.get("options", []))
-            # Options that cross-reference other option letters break when reshuffled.
-            if any(self._SELF_REF_OPTION.search(str(opt)) for opt in options):
-                result.append(q)
-                continue
-            # Parse "X) text" into {letter: text}
-            content: Dict[str, str] = {}
-            for opt in options:
-                if len(opt) >= 3 and opt[1] == ")":
-                    content[opt[0]] = opt[3:]
-            if len(content) != 4:
-                result.append(q)  # can't safely reorder, leave as-is
-                continue
-
-            # Swap the content at the two positions (transposition)
-            content[current], content[target] = content[target], content[current]
-
-            new_options = [f"{l}) {content[l]}" for l in ["A", "B", "C", "D"]]
-
-            # incorrect_explanations: the key `target` (a wrong option that just moved
-            # to position `current`) must be renamed to `current`.
-            old_inc = dict(q.get("incorrect_explanations", {}))
-            new_inc: Dict[str, str] = {}
-            for key, explanation in old_inc.items():
-                new_inc[current if key == target else key] = explanation
-
-            q = dict(q)
-            q["options"] = new_options
-            q["correct_answer"] = target
-            q["incorrect_explanations"] = new_inc
-
-            # Update any stale letter references inside explanation text. The model
-            # sometimes writes "Option B" despite the letter-independence rule; after a
-            # transposition those references point to the wrong option. Swap them in sync
-            # with the content swap that was just performed.
-            q["correct_explanations"] = [
-                self._swap_letter_refs(e, current, target) if isinstance(e, str) else e
-                for e in q.get("correct_explanations", [])
-            ]
-            q["incorrect_explanations"] = {
-                k: self._swap_letter_refs(v, current, target) if isinstance(v, str) else v
-                for k, v in q["incorrect_explanations"].items()
-            }
-
-            result.append(q)
-
-        return result
+    # ------------------------------------------------------------------
+    # MCQ generation
+    # ------------------------------------------------------------------
 
     def _retrieve_mcq_context(self, subject: str, grade: int, unit: str, difficulty: str):
-        """
-        Fetch the context used for MCQ generation.
-
-        The SAT set is ~80% verbal aptitude and ~20% quantitative, so we steer its retrieval
-        toward vocabulary, reading and reasoning material plus some quantitative problem
-        content — rather than letting a generic query pull only the test-strategy prose that
-        lives in the SAT prep PDFs. All other subjects use one straightforward query.
-        """
         if subject.lower() == "sat":
             question = (
                 f"{difficulty} aptitude material: vocabulary and word meanings, synonyms and "
@@ -721,42 +94,26 @@ class GenerationAgent:
             question = f"Generate {difficulty} MCQs for this content"
 
         return self.context_agent.query_db(
-            subject=subject,
-            question=question,
+            subject=subject, question=question,
             grade=grade, unit=unit, type_req="quiz",
         )
 
     @retry_on_none(max_retries=3)
-    def generate_mcqs(self, subject: str, grade: int, unit: str, num_questions: int = 5, difficulty: str = "hard") -> Dict[str, Any]:
-        """
-        Generate multiple choice questions with comprehensive validation.
-
-        Args:
-            subject (str): Subject area
-            grade (int): Grade level
-            unit (str): Unit/chapter identifier
-            num_questions (int): Number of questions to generate
-            difficulty (str): Difficulty level - "easy", "medium", "hard", or "challenging"
-
-        Returns:
-            Dict[str, Any]: Generated MCQs with validation results
-        """
+    def generate_mcqs(self, subject: str, grade: int, unit: str,
+                      num_questions: int = 5, difficulty: str = "hard") -> Dict[str, Any]:
+        """Generate multiple choice questions with comprehensive validation."""
         token_usage = TokenCount(0, 0, 0.0)
         try:
-            # Validate difficulty level
             if difficulty not in ["easy", "medium", "hard", "challenging"]:
-                difficulty = "medium"  # Default to medium if invalid
+                difficulty = "medium"
 
-            # Get refined context for MCQ generation (verbal-focused query for SAT)
             context_response = self._retrieve_mcq_context(subject, grade, unit, difficulty)
-
             if context_response.error:
                 return {"error": context_response.error}
 
-            # Get subject-specific rules before creating the prompt
-            subject_rules = self._get_subject_rules(subject)
-            subject_guidance = self._get_mcq_subject_guidance(subject) or "- No additional subject-specific rules."
-            grounding_rule = self._get_grounding_rule(subject)
+            subject_rules = get_subject_rules(subject)
+            subject_guidance = get_mcq_subject_guidance(subject) or "- No additional subject-specific rules."
+            grounding_rule = get_grounding_rule(subject)
 
             prompt = PromptTemplate.from_template("""
                 Generate {num_questions} {difficulty} multiple choice questions based on the following context.
@@ -889,7 +246,7 @@ class GenerationAgent:
 
             chain = prompt | self._json_llm | StrOutputParser()
             invoke_args = {
-                "context": _format_docs(context_response.context),
+                "context": format_docs(context_response.context),
                 "areas": context_response.parsed_answer.get("areas", []),
                 "num_questions": num_questions,
                 "subject_rules": subject_rules,
@@ -899,7 +256,9 @@ class GenerationAgent:
             }
 
             response = chain.invoke(invoke_args)
-            parsed_response = self._parse_llm_response(str(response))
+            parsed_response = parse_llm_response(str(response), self.logger)
+            if "error" in parsed_response and "questions" not in parsed_response:
+                return None  # triggers @retry_on_none
 
             validation_result = self.validation_agent.validate_mcqs(
                 parsed_response.get("questions", []),
@@ -910,36 +269,42 @@ class GenerationAgent:
             if validation_result["needs_replacement"]:
                 replacement_count = len(validation_result["invalid_indices"])
                 additional_response = chain.invoke({**invoke_args, "num_questions": replacement_count})
-                additional_parsed = self._parse_llm_response(str(additional_response))
+                additional_parsed = parse_llm_response(str(additional_response), self.logger)
                 valid_questions = validation_result["valid_mcqs"] + additional_parsed.get("questions", [])
             else:
                 valid_questions = validation_result["valid_mcqs"]
 
-            # Deterministic backstop: drop exam-meta / test-prep questions the prep PDFs leak
-            # (SAT/English only), e.g. "What is passage evidence?" or study-strategy questions.
             valid_questions = [
                 q for q in valid_questions
-                if not self._is_test_prep_artifact(subject, q.get("topic"), q.get("question"), q.get("passage"))
+                if not is_test_prep_artifact(subject, q.get("topic"), q.get("question"), q.get("passage"))
             ]
 
-            # Redistribute correct answers across A/B/C/D by reordering options arrays
-            valid_questions = self._redistribute_answer_positions(valid_questions)
+            # Top-up: filters may have dropped questions below the requested count.
+            # Request the shortfall plus a small buffer, apply the same filters, then append.
+            shortfall = num_questions - len(valid_questions)
+            if shortfall > 0:
+                topup_response = chain.invoke({**invoke_args, "num_questions": shortfall + 2})
+                topup_parsed = parse_llm_response(str(topup_response), self.logger)
+                topup_questions = [
+                    q for q in topup_parsed.get("questions", [])
+                    if not is_test_prep_artifact(subject, q.get("topic"), q.get("question"), q.get("passage"))
+                ]
+                valid_questions = valid_questions + topup_questions
 
-            # Normalise per-question fields the model sometimes gets wrong
+            valid_questions = redistribute_answer_positions(valid_questions)
+
             _none_like = ("N/A", "NA", "NONE", "-", "NOT APPLICABLE", "NULL")
             for q in valid_questions:
                 q["difficulty"] = difficulty
                 ws = q.get("workout_steps")
                 if not ws or str(ws).strip().upper() in _none_like:
                     q["workout_steps"] = None
-                # Passage is optional; collapse missing/placeholder values to a real None so
-                # consumers can rely on `passage is None` to mean "self-contained question".
                 passage = q.get("passage")
                 if not passage or str(passage).strip().upper() in _none_like:
                     q["passage"] = None
 
-            token_usage = self.record_token_usage(
-                f"{_format_docs(context_response.context)}\n{subject_rules}\n{difficulty}",
+            token_usage = self._record_token_usage(
+                f"{format_docs(context_response.context)}\n{subject_rules}\n{difficulty}",
                 str(parsed_response)
             )
 
@@ -951,49 +316,29 @@ class GenerationAgent:
             }
 
         except Exception as e:
-            self.logger.error(f"Error generating MCQs: {str(e)}")
-            return {
-                "error": f"MCQ generation failed: {str(e)}",
-                "difficulty": difficulty,
-                "token_usage": str(token_usage)
-            }
+            self.logger.error(f"Error generating MCQs: {e}")
+            return {"error": f"MCQ generation failed: {e}", "difficulty": difficulty, "token_usage": str(token_usage)}
 
-    def generate_flashcards(self, subject: str, num_cards: int = 5, topic: Optional[str] = None, 
-                           grade: Optional[int] = None, unit: Optional[str] = None, 
-                           difficulty: str = "medium") -> Dict[str, Any]:
-        """
-        Generate educational flashcards with validation.
+    # ------------------------------------------------------------------
+    # Flashcard generation
+    # ------------------------------------------------------------------
 
-        Args:
-            subject (str): Subject area
-            num_cards (int): Number of flashcards to generate
-            topic (Optional[str]): Specific topic for flashcard generation
-            grade (Optional[int]): Grade level
-            unit (Optional[str]): Unit/chapter identifier
-            difficulty (str): Difficulty level - "easy", "medium", "hard", or "challenging"
-
-        Returns:
-            Dict[str, Any]: Generated flashcards with validation results
-        """
+    def generate_flashcards(self, subject: str, num_cards: int = 5,
+                            topic: Optional[str] = None, grade: Optional[int] = None,
+                            unit: Optional[str] = None, difficulty: str = "medium") -> Dict[str, Any]:
+        """Generate educational flashcards with validation."""
         token_usage = TokenCount(0, 0, 0.0)
         try:
-            # Validate difficulty level
             if difficulty not in ["easy", "medium", "hard", "challenging"]:
-                difficulty = "medium"  # Default to medium if invalid
+                difficulty = "medium"
 
-            # Determine the question based on the presence of topic
             if topic:
                 question = f"Generate {difficulty} flashcards for this content on the topic of {topic}"
                 context_response = self.context_agent.query_db(
-                    subject=subject,
-                    question=question,
-                    grade=None,
-                    unit=None,
-                    type_req="chat"  # Use the same context fetching as chat response
+                    subject=subject, question=question,
+                    grade=None, unit=None, type_req="chat"
                 )
             elif subject.lower() == "sat":
-                # SAT is ~80% verbal aptitude / ~20% quantitative — steer retrieval so the
-                # generic query does not pull only test-strategy prose from the prep PDFs.
                 question = (
                     f"{difficulty} aptitude material: vocabulary, synonyms and antonyms, "
                     f"analogies, classification, sentence correction, reading and verbal "
@@ -1005,25 +350,18 @@ class GenerationAgent:
             else:
                 question = f"Generate {difficulty} flashcards for this content"
                 context_response = self.context_agent.query_db(
-                    subject=subject,
-                    question=question,
-                    grade=grade,
-                    unit=unit,
-                    type_req="quiz"
+                    subject=subject, question=question, grade=grade, unit=unit, type_req="quiz"
                 )
-            
+
             if context_response.error:
                 return {"error": context_response.error}
-
-            # Check if context is empty
             if not context_response.context:
                 return {"error": "No relevant documents found"}
 
-            # Get subject-specific rules before creating the prompt
-            subject_rules = self._get_subject_rules(subject)
-            subject_focus = self._get_subject_focus(subject) or "- No additional subject focus."
-            grounding_rule = self._get_grounding_rule(subject)
-            presentation_rules = self._presentation_rules()
+            subject_rules = get_subject_rules(subject)
+            subject_focus = get_subject_focus(subject) or "- No additional subject focus."
+            grounding_rule = get_grounding_rule(subject)
+            pres_rules = presentation_rules()
 
             prompt = PromptTemplate.from_template("""
                 Generate {num_cards} {difficulty} flashcards based on the following context.
@@ -1106,69 +444,59 @@ class GenerationAgent:
             """)
 
             chain = prompt | self._json_llm | StrOutputParser()
-
-            response = chain.invoke({
-                "context": _format_docs(context_response.context),
+            invoke_args = {
+                "context": format_docs(context_response.context),
                 "areas": context_response.parsed_answer.get("areas", []),
                 "num_cards": num_cards,
                 "difficulty": difficulty,
                 "subject_rules": subject_rules,
                 "subject_focus": subject_focus,
                 "grounding_rule": grounding_rule,
-                "presentation_rules": presentation_rules,
-            })
+                "presentation_rules": pres_rules,
+            }
 
-            parsed_response = self._parse_llm_response(str(response))
+            response = chain.invoke(invoke_args)
+            parsed_response = parse_llm_response(str(response), self.logger)
+            if "error" in parsed_response and "flashcards" not in parsed_response:
+                return None  # triggers retry in caller
 
-            # Validate flashcards
             validation_result = self.validation_agent.validate_flashcards(
                 parsed_response.get("flashcards", []),
                 context_response.context,
                 context_response.parsed_answer.get("areas", [])
             )
 
-            # Generate replacements if needed
             if validation_result["needs_replacement"]:
                 replacement_count = len(validation_result["invalid_indices"])
-                additional_response = chain.invoke({
-                    "context": _format_docs(context_response.context),
-                    "areas": context_response.parsed_answer.get("areas", []),
-                    "num_cards": replacement_count,
-                    "difficulty": difficulty,
-                    "subject_rules": subject_rules,
-                    "subject_focus": subject_focus,
-                    "grounding_rule": grounding_rule,
-                    "presentation_rules": presentation_rules,
-                })
-
-                additional_parsed = self._parse_llm_response(str(additional_response))
+                additional_response = chain.invoke({**invoke_args, "num_cards": replacement_count})
+                additional_parsed = parse_llm_response(str(additional_response), self.logger)
                 valid_cards = validation_result["valid_flashcards"] + additional_parsed.get("flashcards", [])
-
             else:
                 valid_cards = validation_result["valid_flashcards"]
 
-            # Deterministic backstop: drop exam-meta / test-prep cards the prep PDFs leak
-            # (SAT/English only), e.g. "What is passage evidence?" or study acronyms.
             valid_cards = [
                 c for c in valid_cards
-                if not self._is_test_prep_artifact(subject, c.get("front"), c.get("back"), c.get("topic"))
+                if not is_test_prep_artifact(subject, c.get("front"), c.get("back"), c.get("topic"))
             ]
 
-            # Semantic-duplicate filter: two cards are duplicates when their normalised fronts
-            # are identical (same words, order-independent) even if the phrasing differs
-            # ("Correct this: …" vs "Correct the error: …" about the same sentence).
+            # Top-up: filters may have dropped cards below the requested count.
+            shortfall = num_cards - len(valid_cards)
+            if shortfall > 0:
+                topup_response = chain.invoke({**invoke_args, "num_cards": shortfall + 2})
+                topup_parsed = parse_llm_response(str(topup_response), self.logger)
+                topup_cards = [
+                    c for c in topup_parsed.get("flashcards", [])
+                    if not is_test_prep_artifact(subject, c.get("front"), c.get("back"), c.get("topic"))
+                ]
+                valid_cards = valid_cards + topup_cards
+
             def _normalise(text: str) -> frozenset:
                 return frozenset(re.sub(r"[^\w]", " ", text.lower()).split())
 
-            # Extract the primary focus word from a flashcard front — the quoted/capitalised
-            # target word being tested. Limits one card per focus word so the same vocabulary
-            # item (e.g. "alacrity") doesn't dominate the set.
             def _focus_word(front: str) -> Optional[str]:
-                # Single-quoted or double-quoted word
                 m = re.search(r"['\"]([A-Za-z]{4,})['\"]", front)
                 if m:
                     return m.group(1).lower()
-                # ALL-CAPS word of 4+ letters
                 m = re.search(r"\b([A-Z]{4,})\b", front)
                 if m:
                     return m.group(1).lower()
@@ -1181,9 +509,7 @@ class GenerationAgent:
                 front_text = str(c.get("front", ""))
                 key = _normalise(front_text)
                 focus = _focus_word(front_text)
-                if key in seen_fronts:
-                    continue
-                if focus and focus in seen_focus:
+                if key in seen_fronts or (focus and focus in seen_focus):
                     continue
                 seen_fronts.add(key)
                 if focus:
@@ -1194,8 +520,8 @@ class GenerationAgent:
             for card in valid_cards:
                 card["difficulty"] = difficulty
 
-            token_usage = self.record_token_usage(
-                f"{_format_docs(context_response.context)}\n{subject_rules}\n{difficulty}",
+            token_usage = self._record_token_usage(
+                f"{format_docs(context_response.context)}\n{subject_rules}\n{difficulty}",
                 str(parsed_response)
             )
 
@@ -1207,42 +533,32 @@ class GenerationAgent:
             }
 
         except Exception as e:
-            self.logger.error(f"Error generating flashcards: {str(e)}")
-            return {
-                "error": f"Flashcard generation failed: {str(e)}",
-                "difficulty": difficulty,
-                "token_usage": str(token_usage)
-            }
+            self.logger.error(f"Error generating flashcards: {e}")
+            return {"error": f"Flashcard generation failed: {e}", "difficulty": difficulty, "token_usage": str(token_usage)}
 
-    def chat_response(self, subject: str, question: str, session_id: Optional[str] = None,
+    # ------------------------------------------------------------------
+    # Chat
+    # ------------------------------------------------------------------
+
+    def chat_response(self, subject: str, question: str,
+                      session_id: Optional[str] = None,
                       grade: Optional[int] = None) -> Dict[str, Any]:
-        """
-        Generate contextual educational responses to student questions with chat history support.
-        """
+        """Generate contextual educational responses with chat history support."""
         token_usage = TokenCount(0, 0, 0.0)
         try:
-            # Get or create session
-            session = None
-            if session_id:
-                session = self.get_chat_session(session_id)
+            session = self.sessions.get(session_id) if session_id else None
             if not session:
-                session_id = self.create_chat_session(subject, grade=grade)
-                session = self.active_sessions[session_id]
+                session_id = self.sessions.create(subject, grade=grade)
+                session = self.sessions.get(session_id)
             elif grade is not None and session.grade is None:
                 session.grade = grade
 
-            # Capture history BEFORE adding the current question so the LLM prompt
-            # gets prior exchanges via {chat_history} and the new question via {question}
-            # without duplication.
             chat_history = session.get_recent_context()
             session.add_message("user", question)
 
             context_response = self.context_agent.query_db(
-                subject=subject,
-                question=question,
-                grade=session.grade,
-                unit=None,
-                type_req="chat"
+                subject=subject, question=question,
+                grade=session.grade, unit=None, type_req="chat"
             )
 
             if context_response.error:
@@ -1299,19 +615,19 @@ class GenerationAgent:
 
             chain = prompt | self._json_llm | StrOutputParser()
             response = chain.invoke({
-                "context": _format_docs(context_response.context),
+                "context": format_docs(context_response.context),
                 "question": question,
                 "keypoints": context_response.parsed_answer.get("keypoints", []),
                 "chat_history": chat_history,
                 "current_title": session.title,
                 "subject": session.subject,
                 "grade_line": f"\n{grade_line}" if grade_line else "",
-                "grounding_rule": self._get_grounding_rule(subject),
+                "grounding_rule": get_grounding_rule(subject),
             })
 
-            parsed_response = self._parse_llm_response(str(response))
+            parsed_response = parse_llm_response(str(response), self.logger)
 
-            if (session.title == "New Chat" or parsed_response.get("should_update_title", False)):
+            if session.title == "New Chat" or parsed_response.get("should_update_title", False):
                 new_title = parsed_response.get("title", "")
                 if new_title and new_title != session.title:
                     session.title = new_title
@@ -1320,9 +636,8 @@ class GenerationAgent:
             key_concepts = parsed_response.get("key_concepts", [])
             session.add_message("assistant", answer, key_concepts=key_concepts)
 
-            subject_rules = self._get_subject_rules(subject)
-            token_usage = self.record_token_usage(
-                f"{_format_docs(context_response.context)}\n{subject_rules}",
+            token_usage = self._record_token_usage(
+                f"{format_docs(context_response.context)}\n{get_subject_rules(subject)}",
                 str(parsed_response)
             )
 
@@ -1339,50 +654,39 @@ class GenerationAgent:
             }
 
         except Exception as e:
-            self.logger.error(f"Error generating chat response: {str(e)}")
+            self.logger.error(f"Error generating chat response: {e}")
             return {
                 "title": "Error Session",
-                "session_id": session_id if session_id else None,
+                "session_id": session_id,
                 "conversation_history": session.get_history_as_list() if session else [],
                 "current_response": None,
-                "error": f"Chat response generation failed: {str(e)}",
+                "error": f"Chat response generation failed: {e}",
                 "token_usage": str(token_usage),
             }
 
-    def generate_notes(self, subject: str, topic: str, grade: Optional[int] = None, unit: Optional[str] = None, version: str = "1.0") -> Dict[str, Any]:
-        """
-        Generate comprehensive study notes with examples and explanations.
+    # ------------------------------------------------------------------
+    # Notes generation
+    # ------------------------------------------------------------------
 
-        Args:
-            subject (str): Subject area
-            topic (str): Specific topic for note generation
-            grade (Optional[int]): Grade level
-            unit (Optional[str]): Unit/chapter identifier
-
-        Returns:
-            Dict[str, Any]: Structured notes with validation results
-        """
+    def generate_notes(self, subject: str, topic: str, grade: Optional[int] = None,
+                       unit: Optional[str] = None, version: str = "1.0") -> Dict[str, Any]:
+        """Generate comprehensive study notes with examples and explanations."""
         token_usage = TokenCount(0, 0, 0.0)
         try:
-            # Get refined context for note generation
             context_response = self.context_agent.query_db(
                 subject=subject,
                 question=f"Generate detailed comprehensive notes about {topic}",
-                grade=grade,
-                unit=unit,
-                type_req="notes"
+                grade=grade, unit=unit, type_req="notes"
             )
-            
+
             if context_response.error:
                 return {"error": context_response.error}
 
-            # Get subject-specific rules before creating the prompt
-            subject_rules = self._get_subject_rules(subject)
-            subject_focus = self._get_subject_focus(subject) or "- No additional subject focus."
-            grounding_rule = self._get_grounding_rule(subject)
-            presentation_rules = self._presentation_rules()
+            subject_rules = get_subject_rules(subject)
+            subject_focus = get_subject_focus(subject) or "- No additional subject focus."
+            grounding_rule = get_grounding_rule(subject)
+            pres_rules = presentation_rules()
 
-            # Enhanced note generation prompt with more detailed structure
             prompt = PromptTemplate.from_template("""
                 Generate comprehensive educational notes on the topic based on the provided context.
 
@@ -1496,7 +800,7 @@ class GenerationAgent:
 
                 Context: {context}
                 Topic: {topic}
-                
+
                 Subject: {subject}
                 Subject Rules: {rules}
 
@@ -1562,41 +866,31 @@ class GenerationAgent:
             """)
 
             chain = prompt | self._json_llm | StrOutputParser()
-
             response = chain.invoke({
-                "context": _format_docs(context_response.context),
+                "context": format_docs(context_response.context),
                 "topic": topic,
                 "subject": subject,
                 "rules": subject_rules,
                 "subject_focus": subject_focus,
                 "grounding_rule": grounding_rule,
-                "presentation_rules": presentation_rules,
+                "presentation_rules": pres_rules,
             })
 
-            parsed_response = self._parse_llm_response(str(response))
+            parsed_response = parse_llm_response(str(response), self.logger)
 
-            # Core sections required for all subjects
-            required_sections = [
-                "title", "overview", "learning_objectives", "key_concepts",
-                "real_world_applications",
-            ]
-            # Science subjects also need these sections present (may be [] for non-applicable cases)
-            if subject.lower() in self.stem_subjects:
+            required_sections = ["title", "overview", "learning_objectives", "key_concepts", "real_world_applications"]
+            if subject.lower() in STEM_SUBJECTS:
                 required_sections += ["worked_examples", "practice_problems"]
 
             if not all(key in parsed_response for key in required_sections):
                 raise ValueError("Generated notes missing required sections")
 
-            # Content validation (advisory — does not block returning the notes)
             notes_validation = self.validation_agent.validate_notes(
                 parsed_response, context_response.context
             )
             if not notes_validation.get("is_valid", True):
-                self.logger.warning(
-                    f"Notes validation flagged content: {notes_validation.get('reason', '')}"
-                )
+                self.logger.warning(f"Notes validation flagged content: {notes_validation.get('reason', '')}")
 
-            # Add enhanced metadata
             parsed_response["metadata"] = {
                 "subject": subject,
                 "topic": topic,
@@ -1610,47 +904,39 @@ class GenerationAgent:
                 "validation_note": notes_validation.get("reason", ""),
             }
 
-            token_usage = self.record_token_usage(
-                f"{_format_docs(context_response.context)}\n{subject_rules}",
+            token_usage = self._record_token_usage(
+                f"{format_docs(context_response.context)}\n{subject_rules}",
                 str(parsed_response)
             )
 
-            return {
-                "notes": parsed_response,
-                "error": None,
-                "token_usage": str(token_usage)
-            }
+            return {"notes": parsed_response, "error": None, "token_usage": str(token_usage)}
 
         except Exception as e:
-            self.logger.error(f"Error generating notes: {str(e)}")
-            return {
-                "error": f"Notes generation failed: {str(e)}",
-                "token_usage": str(token_usage)
-            }
+            self.logger.error(f"Error generating notes: {e}")
+            return {"error": f"Notes generation failed: {e}", "token_usage": str(token_usage)}
 
-    def evaluate_practice_answer(self, subject: str, question: Dict[str, Any], student_answer: str) -> Dict[str, Any]:
+    # ------------------------------------------------------------------
+    # Answer evaluation
+    # ------------------------------------------------------------------
+
+    def evaluate_practice_answer(self, subject: str, question: Dict[str, Any],
+                                  student_answer: str) -> Dict[str, Any]:
         token_usage = TokenCount(0, 0, 0.0)
         try:
-            # Input validation remains the same
             if not isinstance(question, dict) or 'question' not in question:
                 raise ValueError("Invalid question format")
-            
             if not student_answer.strip():
                 raise ValueError("Empty student answer")
 
-            # Get relevant context
             context_response = self.context_agent.query_db(
-                subject=subject,
-                question=question["question"],
-                type_req="chat"
+                subject=subject, question=question["question"], type_req="chat"
             )
-            
+
             if context_response.error:
                 raise ValueError(f"Failed to get context: {context_response.error}")
 
-            # Get subject-specific rules before creating the prompt
-            subject_rules = self._get_subject_rules(subject)
-            
+            subject_rules = get_subject_rules(subject)
+
             prompt = PromptTemplate.from_template("""
                 Evaluate this student's answer.
 
@@ -1706,83 +992,71 @@ class GenerationAgent:
             """)
 
             chain = prompt | self._json_llm | StrOutputParser()
-
             response = chain.invoke({
                 "subject": subject,
                 "question": question["question"],
                 "solution_approach": question.get("solution_approach", ""),
                 "student_answer": student_answer,
-                "context": _format_docs(context_response.context),
-                "grounding_rule": self._get_grounding_rule(subject),
+                "context": format_docs(context_response.context),
+                "grounding_rule": get_grounding_rule(subject),
             })
 
-            # Parse response with enhanced error handling
             try:
-                # Clean the response string
                 response_str = str(response).strip()
-                # Extract JSON if embedded in other text
                 start_idx = response_str.find('{')
                 end_idx = response_str.rfind('}') + 1
-                if start_idx != -1 and end_idx > start_idx:
-                    json_str = response_str[start_idx:end_idx]
-                else:
+                if start_idx == -1 or end_idx <= start_idx:
                     raise ValueError("No JSON object found in response")
 
-                parsed_response = json.loads(json_str)
-                
+                parsed_response = json.loads(response_str[start_idx:end_idx])
+
                 raw_solution = parsed_response.get("correct_solution", [])
                 if isinstance(raw_solution, list):
-                    correct_solution = [self._clean_unicode(str(s)) for s in raw_solution]
+                    correct_solution = [clean_unicode(str(s)) for s in raw_solution]
                 else:
-                    # Fallback: split on literal \n if model ignored the array instruction
-                    correct_solution = [self._clean_unicode(s.strip()) for s in str(raw_solution).split("\\n") if s.strip()]
+                    correct_solution = [clean_unicode(s.strip()) for s in str(raw_solution).split("\\n") if s.strip()]
 
-                token_usage = self.record_token_usage(
-                    f"{_format_docs(context_response.context)}\n{subject_rules}",
+                token_usage = self._record_token_usage(
+                    f"{format_docs(context_response.context)}\n{subject_rules}",
                     str(parsed_response)
                 )
 
-                evaluation_result = {
+                return {
                     "practice_question": question,
                     "student_answer": student_answer,
                     "is_correct": bool(parsed_response.get("is_correct", False)),
                     "score": float(max(0, min(1, float(parsed_response.get("score", 0))))),
-                    "feedback": self._clean_unicode(str(parsed_response.get("feedback", "No detailed feedback available"))).strip(),
+                    "feedback": clean_unicode(str(parsed_response.get("feedback", "No detailed feedback available"))).strip(),
                     "improvement_suggestions": [
-                        self._clean_unicode(str(s))
+                        clean_unicode(str(s))
                         for s in parsed_response.get("improvement_suggestions", ["Review your approach"])
                         if str(s).strip()
                     ] or ["Review your approach"],
                     "correct_solution": correct_solution or ["Solution not provided"],
                     "misconceptions": [
-                        self._clean_unicode(str(m))
+                        clean_unicode(str(m))
                         for m in parsed_response.get("misconceptions", [])
                         if str(m).strip()
                     ],
                     "key_points_missed": [
-                        self._clean_unicode(str(p))
+                        clean_unicode(str(p))
                         for p in parsed_response.get("key_points_missed", [])
                         if str(p).strip()
                     ],
                     "strengths": [
-                        self._clean_unicode(str(s))
+                        clean_unicode(str(s))
                         for s in parsed_response.get("strengths", ["Areas of strength not identified"])
                         if str(s).strip()
                     ] or ["Areas of strength not identified"],
                     "token_usage": str(token_usage),
                 }
 
-                return evaluation_result
-
             except json.JSONDecodeError as e:
-                self.logger.error(f"JSON parsing error: {str(e)}\nResponse: {response_str}")
-                raise ValueError(f"Invalid JSON format in response: {str(e)}")
-            except Exception as e:
-                self.logger.error(f"Response parsing error: {str(e)}")
-                raise ValueError(f"Failed to parse evaluation response: {str(e)}")
+                self.logger.error(f"JSON parsing error: {e}\nResponse: {response_str}")
+                raise ValueError(f"Invalid JSON format in response: {e}")
 
         except Exception as e:
-            self.logger.error(f"Evaluation error: {str(e)}")
+            self.logger.error(f"Evaluation error: {e}")
             return {
                 "error": str(e),
                 "is_correct": False,

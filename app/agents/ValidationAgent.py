@@ -5,29 +5,11 @@ from dotenv import load_dotenv
 from langchain_deepseek import ChatDeepSeek
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.documents import Document
 import json
 import tiktoken
-from dataclasses import dataclass
 
-
-def _format_docs(context) -> str:
-    if isinstance(context, list):
-        return "\n\n".join(
-            doc.page_content if isinstance(doc, Document) else str(doc)
-            for doc in context
-        )
-    return str(context)
-
-
-@dataclass
-class TokenCount:
-    input_tokens: int
-    output_tokens: int
-    total_cost: float
-
-    def __str__(self):
-        return f"Input tokens: {self.input_tokens}\nOutput tokens: {self.output_tokens}\nTotal tokens: {self.input_tokens + self.output_tokens}\nEstimated cost: ${self.total_cost:.4f}"
+from models import TokenCount
+from utils import format_docs as _format_docs
 
 
 class ValidationAgent:
@@ -357,3 +339,4 @@ class ValidationAgent:
                 "needs_regeneration": False,
                 "token_usage": str(_zero)
             }
+
