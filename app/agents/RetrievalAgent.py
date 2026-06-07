@@ -1,6 +1,6 @@
+import asyncio
 import logging
 from typing import List, Optional
-from time import sleep
 from langchain_core.documents import Document
 from langchain_ollama import OllamaEmbeddings
 from pymilvus import MilvusClient
@@ -99,7 +99,7 @@ class RetrievalAgent:
             base = 60
         return int(base * k_multiplier)
 
-    def query_vector_store(
+    async def query_vector_store(
         self,
         subject: str,
         question: str,
@@ -119,11 +119,12 @@ class RetrievalAgent:
 
         for attempt in range(self.MAX_RETRIES):
             try:
-                query_vector = self.embeddings.embed_query(question)
+                query_vector = await self.embeddings.aembed_query(question)
                 k = self._calculate_k(type_req, k_multiplier)
                 expr = self._build_filter(subject, grade, unit, type_req)
 
-                results = self.client.search(
+                results = await asyncio.to_thread(
+                    self.client.search,
                     collection_name=COLLECTION_NAME,
                     data=[query_vector],
                     limit=k,
@@ -151,7 +152,7 @@ class RetrievalAgent:
             except Exception as e:
                 logger.warning(f"Attempt {attempt + 1} failed: {e}")
                 if attempt < self.MAX_RETRIES - 1:
-                    sleep(self.RETRY_DELAY)
+                    await asyncio.sleep(self.RETRY_DELAY)
                 else:
                     raise RetrievalAgentError(
                         f"Failed to query Milvus after {self.MAX_RETRIES} attempts: {e}"

@@ -1,3 +1,4 @@
+import asyncio
 import functools
 import json
 import logging
@@ -19,16 +20,28 @@ def format_docs(context) -> str:
 def retry_on_none(max_retries=3):
     """Retry a function up to max_retries times if it returns None, with exponential back-off."""
     def decorator_retry(func):
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            for attempt in range(max_retries):
-                result = func(*args, **kwargs)
-                if result is not None:
-                    return result
-                if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)
-            raise ValueError(f"Failed to get a valid response after {max_retries} attempts")
-        return wrapper
+        if asyncio.iscoroutinefunction(func):
+            @functools.wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                for attempt in range(max_retries):
+                    result = await func(*args, **kwargs)
+                    if result is not None:
+                        return result
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(2 ** attempt)
+                raise ValueError(f"Failed to get a valid response after {max_retries} attempts")
+            return async_wrapper
+        else:
+            @functools.wraps(func)
+            def wrapper(*args, **kwargs):
+                for attempt in range(max_retries):
+                    result = func(*args, **kwargs)
+                    if result is not None:
+                        return result
+                    if attempt < max_retries - 1:
+                        time.sleep(2 ** attempt)
+                raise ValueError(f"Failed to get a valid response after {max_retries} attempts")
+            return wrapper
     return decorator_retry
 
 

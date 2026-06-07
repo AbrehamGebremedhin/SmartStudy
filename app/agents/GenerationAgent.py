@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -82,7 +83,7 @@ class GenerationAgent:
     # MCQ generation
     # ------------------------------------------------------------------
 
-    def _retrieve_mcq_context(self, subject: str, grade: int, unit: str, difficulty: str):
+    async def _retrieve_mcq_context(self, subject: str, grade: int, unit: str, difficulty: str):
         if subject.lower() == "sat":
             question = (
                 f"{difficulty} aptitude material: vocabulary and word meanings, synonyms and "
@@ -93,21 +94,21 @@ class GenerationAgent:
         else:
             question = f"Generate {difficulty} MCQs for this content"
 
-        return self.context_agent.query_db(
+        return await self.context_agent.query_db(
             subject=subject, question=question,
             grade=grade, unit=unit, type_req="quiz",
         )
 
     @retry_on_none(max_retries=3)
-    def generate_mcqs(self, subject: str, grade: int, unit: str,
-                      num_questions: int = 5, difficulty: str = "hard") -> Dict[str, Any]:
+    async def generate_mcqs(self, subject: str, grade: int, unit: str,
+                            num_questions: int = 5, difficulty: str = "hard") -> Dict[str, Any]:
         """Generate multiple choice questions with comprehensive validation."""
         token_usage = TokenCount(0, 0, 0.0)
         try:
             if difficulty not in ["easy", "medium", "hard", "challenging"]:
                 difficulty = "medium"
 
-            context_response = self._retrieve_mcq_context(subject, grade, unit, difficulty)
+            context_response = await self._retrieve_mcq_context(subject, grade, unit, difficulty)
             if context_response.error:
                 return {"error": context_response.error}
 
@@ -255,12 +256,12 @@ class GenerationAgent:
                 "difficulty": difficulty,
             }
 
-            response = chain.invoke(invoke_args)
+            response = await chain.ainvoke(invoke_args)
             parsed_response = parse_llm_response(str(response), self.logger)
             if "error" in parsed_response and "questions" not in parsed_response:
                 return None  # triggers @retry_on_none
 
-            validation_result = self.validation_agent.validate_mcqs(
+            validation_result = await self.validation_agent.validate_mcqs(
                 parsed_response.get("questions", []),
                 context_response.context,
                 context_response.parsed_answer.get("areas", [])
@@ -268,7 +269,7 @@ class GenerationAgent:
 
             if validation_result["needs_replacement"]:
                 replacement_count = len(validation_result["invalid_indices"])
-                additional_response = chain.invoke({**invoke_args, "num_questions": replacement_count})
+                additional_response = await chain.ainvoke({**invoke_args, "num_questions": replacement_count})
                 additional_parsed = parse_llm_response(str(additional_response), self.logger)
                 valid_questions = validation_result["valid_mcqs"] + additional_parsed.get("questions", [])
             else:
@@ -283,7 +284,7 @@ class GenerationAgent:
             # Request the shortfall plus a small buffer, apply the same filters, then append.
             shortfall = num_questions - len(valid_questions)
             if shortfall > 0:
-                topup_response = chain.invoke({**invoke_args, "num_questions": shortfall + 2})
+                topup_response = await chain.ainvoke({**invoke_args, "num_questions": shortfall + 2})
                 topup_parsed = parse_llm_response(str(topup_response), self.logger)
                 topup_questions = [
                     q for q in topup_parsed.get("questions", [])
@@ -323,9 +324,9 @@ class GenerationAgent:
     # Flashcard generation
     # ------------------------------------------------------------------
 
-    def generate_flashcards(self, subject: str, num_cards: int = 5,
-                            topic: Optional[str] = None, grade: Optional[int] = None,
-                            unit: Optional[str] = None, difficulty: str = "medium") -> Dict[str, Any]:
+    async def generate_flashcards(self, subject: str, num_cards: int = 5,
+                                  topic: Optional[str] = None, grade: Optional[int] = None,
+                                  unit: Optional[str] = None, difficulty: str = "medium") -> Dict[str, Any]:
         """Generate educational flashcards with validation."""
         token_usage = TokenCount(0, 0, 0.0)
         try:
@@ -334,7 +335,7 @@ class GenerationAgent:
 
             if topic:
                 question = f"Generate {difficulty} flashcards for this content on the topic of {topic}"
-                context_response = self.context_agent.query_db(
+                context_response = await self.context_agent.query_db(
                     subject=subject, question=question,
                     grade=None, unit=None, type_req="chat"
                 )
@@ -344,12 +345,12 @@ class GenerationAgent:
                     f"analogies, classification, sentence correction, reading and verbal "
                     f"reasoning, and quantitative problem solving"
                 )
-                context_response = self.context_agent.query_db(
+                context_response = await self.context_agent.query_db(
                     subject=subject, question=question, grade=grade, unit=unit, type_req="quiz"
                 )
             else:
                 question = f"Generate {difficulty} flashcards for this content"
-                context_response = self.context_agent.query_db(
+                context_response = await self.context_agent.query_db(
                     subject=subject, question=question, grade=grade, unit=unit, type_req="quiz"
                 )
 
@@ -455,12 +456,12 @@ class GenerationAgent:
                 "presentation_rules": pres_rules,
             }
 
-            response = chain.invoke(invoke_args)
+            response = await chain.ainvoke(invoke_args)
             parsed_response = parse_llm_response(str(response), self.logger)
             if "error" in parsed_response and "flashcards" not in parsed_response:
                 return None  # triggers retry in caller
 
-            validation_result = self.validation_agent.validate_flashcards(
+            validation_result = await self.validation_agent.validate_flashcards(
                 parsed_response.get("flashcards", []),
                 context_response.context,
                 context_response.parsed_answer.get("areas", [])
@@ -468,7 +469,7 @@ class GenerationAgent:
 
             if validation_result["needs_replacement"]:
                 replacement_count = len(validation_result["invalid_indices"])
-                additional_response = chain.invoke({**invoke_args, "num_cards": replacement_count})
+                additional_response = await chain.ainvoke({**invoke_args, "num_cards": replacement_count})
                 additional_parsed = parse_llm_response(str(additional_response), self.logger)
                 valid_cards = validation_result["valid_flashcards"] + additional_parsed.get("flashcards", [])
             else:
@@ -482,7 +483,7 @@ class GenerationAgent:
             # Top-up: filters may have dropped cards below the requested count.
             shortfall = num_cards - len(valid_cards)
             if shortfall > 0:
-                topup_response = chain.invoke({**invoke_args, "num_cards": shortfall + 2})
+                topup_response = await chain.ainvoke({**invoke_args, "num_cards": shortfall + 2})
                 topup_parsed = parse_llm_response(str(topup_response), self.logger)
                 topup_cards = [
                     c for c in topup_parsed.get("flashcards", [])
@@ -540,9 +541,9 @@ class GenerationAgent:
     # Chat
     # ------------------------------------------------------------------
 
-    def chat_response(self, subject: str, question: str,
-                      session_id: Optional[str] = None,
-                      grade: Optional[int] = None) -> Dict[str, Any]:
+    async def chat_response(self, subject: str, question: str,
+                            session_id: Optional[str] = None,
+                            grade: Optional[int] = None) -> Dict[str, Any]:
         """Generate contextual educational responses with chat history support."""
         token_usage = TokenCount(0, 0, 0.0)
         try:
@@ -556,7 +557,7 @@ class GenerationAgent:
             chat_history = session.get_recent_context()
             session.add_message("user", question)
 
-            context_response = self.context_agent.query_db(
+            context_response = await self.context_agent.query_db(
                 subject=subject, question=question,
                 grade=session.grade, unit=None, type_req="chat"
             )
@@ -614,7 +615,7 @@ class GenerationAgent:
             """)
 
             chain = prompt | self._json_llm | StrOutputParser()
-            response = chain.invoke({
+            response = await chain.ainvoke({
                 "context": format_docs(context_response.context),
                 "question": question,
                 "keypoints": context_response.parsed_answer.get("keypoints", []),
@@ -668,12 +669,12 @@ class GenerationAgent:
     # Notes generation
     # ------------------------------------------------------------------
 
-    def generate_notes(self, subject: str, topic: str, grade: Optional[int] = None,
-                       unit: Optional[str] = None, version: str = "1.0") -> Dict[str, Any]:
+    async def generate_notes(self, subject: str, topic: str, grade: Optional[int] = None,
+                             unit: Optional[str] = None, version: str = "1.0") -> Dict[str, Any]:
         """Generate comprehensive study notes with examples and explanations."""
         token_usage = TokenCount(0, 0, 0.0)
         try:
-            context_response = self.context_agent.query_db(
+            context_response = await self.context_agent.query_db(
                 subject=subject,
                 question=f"Generate detailed comprehensive notes about {topic}",
                 grade=grade, unit=unit, type_req="notes"
@@ -866,7 +867,7 @@ class GenerationAgent:
             """)
 
             chain = prompt | self._json_llm | StrOutputParser()
-            response = chain.invoke({
+            response = await chain.ainvoke({
                 "context": format_docs(context_response.context),
                 "topic": topic,
                 "subject": subject,
@@ -885,7 +886,7 @@ class GenerationAgent:
             if not all(key in parsed_response for key in required_sections):
                 raise ValueError("Generated notes missing required sections")
 
-            notes_validation = self.validation_agent.validate_notes(
+            notes_validation = await self.validation_agent.validate_notes(
                 parsed_response, context_response.context
             )
             if not notes_validation.get("is_valid", True):
@@ -919,8 +920,8 @@ class GenerationAgent:
     # Answer evaluation
     # ------------------------------------------------------------------
 
-    def evaluate_practice_answer(self, subject: str, question: Dict[str, Any],
-                                  student_answer: str) -> Dict[str, Any]:
+    async def evaluate_practice_answer(self, subject: str, question: Dict[str, Any],
+                                       student_answer: str) -> Dict[str, Any]:
         token_usage = TokenCount(0, 0, 0.0)
         try:
             if not isinstance(question, dict) or 'question' not in question:
@@ -928,7 +929,7 @@ class GenerationAgent:
             if not student_answer.strip():
                 raise ValueError("Empty student answer")
 
-            context_response = self.context_agent.query_db(
+            context_response = await self.context_agent.query_db(
                 subject=subject, question=question["question"], type_req="chat"
             )
 
@@ -992,7 +993,7 @@ class GenerationAgent:
             """)
 
             chain = prompt | self._json_llm | StrOutputParser()
-            response = chain.invoke({
+            response = await chain.ainvoke({
                 "subject": subject,
                 "question": question["question"],
                 "solution_approach": question.get("solution_approach", ""),
@@ -1071,17 +1072,21 @@ class GenerationAgent:
             }
 
 # Example usage
-if __name__ == "__main__":
+async def _main():
     agent = GenerationAgent()
-    
+
     # Generate MCQs
-    mcqs = agent.generate_mcqs(
+    mcqs = await agent.generate_mcqs(
         subject="sat",
         grade=12,
         unit="3",
         num_questions=10
     )
     print("MCQs:", json.dumps(mcqs, indent=2, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    asyncio.run(_main())
 
     # notes = agent.generate_notes(
     #     subject="biology",

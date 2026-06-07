@@ -1,3 +1,4 @@
+import asyncio
 import os
 import logging
 from typing import Dict, List, Any
@@ -40,14 +41,14 @@ class ValidationAgent:
         )
         return TokenCount(input_tokens, output_tokens, cost)
 
-    def _run_chain(self, prompt: PromptTemplate, inputs: dict) -> str:
+    async def _run_chain(self, prompt: PromptTemplate, inputs: dict) -> str:
         if "context" in inputs:
             inputs = {**inputs, "context": _format_docs(inputs["context"])}
         json_llm = self.llm.bind(response_format={"type": "json_object"})
         chain = prompt | json_llm | StrOutputParser()
-        return chain.invoke(inputs)
+        return await chain.ainvoke(inputs)
 
-    def validate_mcqs(self, mcqs: List[Dict], context, areas: List[str]) -> Dict[str, Any]:
+    async def validate_mcqs(self, mcqs: List[Dict], context, areas: List[str]) -> Dict[str, Any]:
         _zero = TokenCount(0, 0, 0.0)
         if not mcqs:
             return {"valid_mcqs": [], "invalid_indices": [], "needs_replacement": False,
@@ -132,7 +133,7 @@ class ValidationAgent:
         llm_invalid: set = set()
         token_usage = _zero
         try:
-            response = self._run_chain(prompt, {
+            response = await self._run_chain(prompt, {
                 "context": context,
                 "areas": areas,
                 "questions": numbered,
@@ -153,7 +154,7 @@ class ValidationAgent:
             "token_usage": str(token_usage),
         }
 
-    def validate_flashcards(self, flashcards: List[Dict], context, areas: List[str]) -> Dict[str, Any]:
+    async def validate_flashcards(self, flashcards: List[Dict], context, areas: List[str]) -> Dict[str, Any]:
         _zero = TokenCount(0, 0, 0.0)
         if not flashcards:
             return {"valid_flashcards": [], "invalid_indices": [], "needs_replacement": False,
@@ -209,7 +210,7 @@ class ValidationAgent:
         llm_invalid: set = set()
         token_usage = _zero
         try:
-            response = self._run_chain(prompt, {
+            response = await self._run_chain(prompt, {
                 "context": context,
                 "areas": areas,
                 "cards": numbered,
@@ -230,7 +231,7 @@ class ValidationAgent:
             "token_usage": str(token_usage),
         }
 
-    def validate_chat_response(self, response: Dict, context, keypoints: List[str]) -> Dict[str, Any]:
+    async def validate_chat_response(self, response: Dict, context, keypoints: List[str]) -> Dict[str, Any]:
         _zero = TokenCount(0, 0, 0.0)
         if isinstance(response, dict):
             if "error" in response:
@@ -273,7 +274,7 @@ class ValidationAgent:
         """)
 
         try:
-            validation_response = self._run_chain(prompt, {
+            validation_response = await self._run_chain(prompt, {
                 "context": context,
                 "keypoints": keypoints,
                 "response": response_text,
@@ -298,7 +299,7 @@ class ValidationAgent:
                 "token_usage": str(_zero)
             }
 
-    def validate_notes(self, notes: Dict[str, Any], context) -> Dict[str, Any]:
+    async def validate_notes(self, notes: Dict[str, Any], context) -> Dict[str, Any]:
         _zero = TokenCount(0, 0, 0.0)
         prompt = PromptTemplate.from_template("""
             Validate these educational notes based on the following criteria:
@@ -314,7 +315,7 @@ class ValidationAgent:
         """)
 
         try:
-            response = self._run_chain(prompt, {
+            response = await self._run_chain(prompt, {
                 "context": context,
                 "notes": json.dumps(notes),
             })

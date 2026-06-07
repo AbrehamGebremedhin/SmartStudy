@@ -1,3 +1,4 @@
+import asyncio
 import os
 import json
 import logging
@@ -80,11 +81,11 @@ class ContextRefinementAgent:
         if not isinstance(subject, str) or not isinstance(question, str):
             raise ValueError("Subject and question must be strings")
 
-    def _run_chain(self, prompt: PromptTemplate, inputs: dict) -> str:
+    async def _run_chain(self, prompt: PromptTemplate, inputs: dict) -> str:
         if "context" in inputs:
             inputs = {**inputs, "context": _format_docs(inputs["context"])}
         chain = prompt | self.llm | StrOutputParser()
-        return chain.invoke(inputs)
+        return await chain.ainvoke(inputs)
 
     def get_prompt(self, type_request: str) -> PromptTemplate:
         if type_request in self._prompt_cache:
@@ -168,7 +169,7 @@ class ContextRefinementAgent:
         return template
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-    def summarize_content(self, context, max_length: int = 500, include_structure: bool = False) -> Dict[str, Any]:
+    async def summarize_content(self, context, max_length: int = 500, include_structure: bool = False) -> Dict[str, Any]:
         base_prompt = """
             You are an expert educational content summarizer. Analyze the provided context and create a structured summary.
 
@@ -206,7 +207,7 @@ class ContextRefinementAgent:
         prompt = PromptTemplate.from_template(base_prompt)
 
         try:
-            answer = self._run_chain(prompt, {"context": context, "max_length": max_length})
+            answer = await self._run_chain(prompt, {"context": context, "max_length": max_length})
             clean_answer = str(answer.strip()).replace("\\", '')
             parsed_answer = self.parser.parse(clean_answer)
 
@@ -234,20 +235,20 @@ class ContextRefinementAgent:
         )
         return TokenCount(input_tokens, output_tokens, cost)
 
-    def query_db(self, subject: str, question: str, grade: Optional[int] = None, unit: Optional[str] = None, type_req: str = "chat") -> RefinementResponse:
+    async def query_db(self, subject: str, question: str, grade: Optional[int] = None, unit: Optional[str] = None, type_req: str = "chat") -> RefinementResponse:
         try:
             self.validate_inputs(subject, question, grade, unit)
             self.logger.info(f"Processing query - Subject: {subject}, Question: {question}")
 
             if type_req == "notes":
-                context = self.retrieval_agent.query_vector_store(
+                context = await self.retrieval_agent.query_vector_store(
                     subject, question, grade, unit, "notes", k_multiplier=1.25
                 )
             elif type_req == "chat":
                 # Pass grade through so chat retrieval is scoped to the student's grade when known
-                context = self.retrieval_agent.query_vector_store(subject, question, grade, None, type_req)
+                context = await self.retrieval_agent.query_vector_store(subject, question, grade, None, type_req)
             else:
-                context = self.retrieval_agent.query_vector_store(subject, question, grade, unit, type_req)
+                context = await self.retrieval_agent.query_vector_store(subject, question, grade, unit, type_req)
 
             if not context:
                 return RefinementResponse(
@@ -258,16 +259,15 @@ class ContextRefinementAgent:
                 )
 
             prompt = self.get_prompt(type_req)
-            answer = self._run_chain(prompt, {
-                "context": context,
-                "student_question": question,
-                "subject": subject,
-            })
-
-            if type_req == "notes":
-                summary = self.summarize_content(context, max_length=1000, include_structure=True)
-            else:
-                summary = self.summarize_content(context)
+            summarize_kwargs = {"max_length": 1000, "include_structure": True} if type_req == "notes" else {}
+            answer, summary = await asyncio.gather(
+                self._run_chain(prompt, {
+                    "context": context,
+                    "student_question": question,
+                    "subject": subject,
+                }),
+                self.summarize_content(context, **summarize_kwargs),
+            )
 
             clean_answer = str(answer.strip()).replace("\\", '')
             parsed_answer = self.parser.parse(clean_answer)
