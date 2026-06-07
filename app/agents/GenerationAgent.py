@@ -792,7 +792,27 @@ class GenerationAgent:
                     }},
                     "review_questions": [
                         {{
-                            "question": "Review question",
+                            "question": "Review question 1",
+                            "key_points": ["Point 1", "Point 2"],
+                            "suggested_answer": "Detailed answer"
+                        }},
+                        {{
+                            "question": "Review question 2",
+                            "key_points": ["Point 1", "Point 2"],
+                            "suggested_answer": "Detailed answer"
+                        }},
+                        {{
+                            "question": "Review question 3",
+                            "key_points": ["Point 1", "Point 2"],
+                            "suggested_answer": "Detailed answer"
+                        }},
+                        {{
+                            "question": "Review question 4",
+                            "key_points": ["Point 1", "Point 2"],
+                            "suggested_answer": "Detailed answer"
+                        }},
+                        {{
+                            "question": "Review question 5",
                             "key_points": ["Point 1", "Point 2"],
                             "suggested_answer": "Detailed answer"
                         }}
@@ -857,6 +877,11 @@ class GenerationAgent:
                     the worked example must state which shuttle or condition produces 32 and why that
                     differs from the theoretical maximum.
 
+                review_questions:
+                  - Generate EXACTLY 5 review questions covering different aspects of the topic.
+                  - Each question must have specific key_points (at least 2) and a detailed suggested_answer.
+                  - Vary the questions across recall, comprehension, and application levels.
+
                 Ensure to:
                 1. Provide detailed explanations for each key concept — multiple paragraphs per concept
                 2. Include multiple examples with varying difficulty levels
@@ -920,8 +945,39 @@ class GenerationAgent:
     # Answer evaluation
     # ------------------------------------------------------------------
 
+    def _extract_note_context(self, note: Dict[str, Any], question_text: str) -> str:
+        """Extract relevant context from a generated note for answer evaluation."""
+        parts = []
+
+        title = note.get("title", "")
+        if title:
+            parts.append(f"Topic: {title}")
+
+        overview = note.get("overview", {})
+        if isinstance(overview, dict) and overview.get("brief_summary"):
+            parts.append(f"Overview: {overview['brief_summary']}")
+
+        key_concepts = note.get("key_concepts", [])
+        if key_concepts:
+            parts.append("Key Concepts:")
+            for kc in key_concepts:
+                if isinstance(kc, dict):
+                    parts.append(f"- {kc.get('concept', '')}: {kc.get('detailed_explanation', '')}")
+
+        review_questions = note.get("review_questions", [])
+        matched_q = next(
+            (rq for rq in review_questions if isinstance(rq, dict) and rq.get("question", "").strip() == question_text.strip()),
+            None
+        )
+        if matched_q:
+            parts.append(f"\nExpected key points for this question: {', '.join(matched_q.get('key_points', []))}")
+            parts.append(f"Suggested answer: {matched_q.get('suggested_answer', '')}")
+
+        return "\n".join(parts)
+
     async def evaluate_practice_answer(self, subject: str, question: Dict[str, Any],
-                                       student_answer: str) -> Dict[str, Any]:
+                                       student_answer: str,
+                                       note: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         token_usage = TokenCount(0, 0, 0.0)
         try:
             if not isinstance(question, dict) or 'question' not in question:
@@ -929,12 +985,15 @@ class GenerationAgent:
             if not student_answer.strip():
                 raise ValueError("Empty student answer")
 
-            context_response = await self.context_agent.query_db(
-                subject=subject, question=question["question"], type_req="chat"
-            )
-
-            if context_response.error:
-                raise ValueError(f"Failed to get context: {context_response.error}")
+            if note is not None:
+                context_str = self._extract_note_context(note, question["question"])
+            else:
+                context_response = await self.context_agent.query_db(
+                    subject=subject, question=question["question"], type_req="chat"
+                )
+                if context_response.error:
+                    raise ValueError(f"Failed to get context: {context_response.error}")
+                context_str = format_docs(context_response.context)
 
             subject_rules = get_subject_rules(subject)
 
@@ -996,9 +1055,9 @@ class GenerationAgent:
             response = await chain.ainvoke({
                 "subject": subject,
                 "question": question["question"],
-                "solution_approach": question.get("solution_approach", ""),
+                "solution_approach": question.get("solution_approach", question.get("suggested_answer", "")),
                 "student_answer": student_answer,
-                "context": format_docs(context_response.context),
+                "context": context_str,
                 "grounding_rule": get_grounding_rule(subject),
             })
 
@@ -1018,7 +1077,7 @@ class GenerationAgent:
                     correct_solution = [clean_unicode(s.strip()) for s in str(raw_solution).split("\\n") if s.strip()]
 
                 token_usage = self._record_token_usage(
-                    f"{format_docs(context_response.context)}\n{subject_rules}",
+                    f"{context_str}\n{subject_rules}",
                     str(parsed_response)
                 )
 
