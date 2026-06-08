@@ -46,4 +46,4 @@ class EvaluateAnswerRequest(BaseModel):
     subject: str
     question: dict
     student_answer: str
-    note: str | None = None
+    note: dict | None = None

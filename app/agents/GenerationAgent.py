@@ -543,7 +543,8 @@ class GenerationAgent:
 
     async def chat_response(self, subject: str, question: str,
                             session_id: Optional[str] = None,
-                            grade: Optional[int] = None) -> Dict[str, Any]:
+                            grade: Optional[int] = None,
+                            chat_history_str: str = "") -> Dict[str, Any]:
         """Generate contextual educational responses with chat history support."""
         token_usage = TokenCount(0, 0, 0.0)
         try:
@@ -554,7 +555,7 @@ class GenerationAgent:
             elif grade is not None and session.grade is None:
                 session.grade = grade
 
-            chat_history = session.get_recent_context()
+            chat_history = chat_history_str or session.get_recent_context()
             session.add_message("user", question)
 
             context_response = await self.context_agent.query_db(

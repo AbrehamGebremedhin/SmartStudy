@@ -12,11 +12,11 @@ def _parse_token_usage(token_usage_str: str | None) -> tuple[int, int, float]:
     output_tokens = 0
     cost_usd = 0.0
 
-    match = re.search(r"Input:\s*([\d,]+)", token_usage_str)
+    match = re.search(r"Input tokens:\s*([\d,]+)", token_usage_str)
     if match:
         input_tokens = int(match.group(1).replace(",", ""))
 
-    match = re.search(r"Output:\s*([\d,]+)", token_usage_str)
+    match = re.search(r"Output tokens:\s*([\d,]+)", token_usage_str)
     if match:
         output_tokens = int(match.group(1).replace(",", ""))
 

@@ -83,6 +83,7 @@ async def run_chat_response(
     question: str,
     session_id: str | None,
     grade: int | None,
+    chat_history_str: str = "",
 ) -> dict:
     agent = get_agent()
     return await agent.chat_response(
@@ -90,6 +91,7 @@ async def run_chat_response(
         question=question,
         session_id=session_id,
         grade=grade,
+        chat_history_str=chat_history_str,
     )
 
 

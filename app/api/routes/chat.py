@@ -79,13 +79,21 @@ async def send_message(
     if session is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
+    prior_messages = session.messages if hasattr(session, "messages") else []
+    chat_history_str = "\n".join(
+        f"{m.role.capitalize()}: {m.content}"
+        for m in prior_messages
+        if m.content
+    )
+
     await crud.add_chat_message(db, session_id, role="user", content=request.question, key_concepts=[])
 
     result = await run_chat_response(
         subject=session.subject,
         question=request.question,
-        session_id=None,  # history is managed in DB; agent gets context via messages below
+        session_id=None,
         grade=session.grade,
+        chat_history_str=chat_history_str,
     )
 
     if result.get("error"):
@@ -94,11 +102,15 @@ async def send_message(
     current_response: dict = result.get("current_response", {})
     key_concepts: list[str] = current_response.get("key_concepts", [])
 
+    history = result.get("conversation_history", [])
+    assistant_msg = next((m for m in reversed(history) if m["role"] == "assistant"), {})
+    answer_text = assistant_msg.get("message", "")
+
     await crud.add_chat_message(
         db,
         session_id,
         role="assistant",
-        content=result.get("current_response", {}).get("response", ""),
+        content=answer_text,
         key_concepts=key_concepts,
     )
 
