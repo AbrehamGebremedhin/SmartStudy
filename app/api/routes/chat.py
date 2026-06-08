@@ -1,0 +1,116 @@
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api.deps import get_current_user
+from app.db import crud
+from app.db.database import get_db
+from app.db.models import User
+from app.schemas.requests import ChatMessageRequest, ChatSessionCreateRequest, UpdateSessionTitleRequest
+from app.schemas.responses import ChatReplyResponse, ChatSessionDetailResponse, ChatSessionResponse
+from app.services.generation import run_chat_response
+
+router = APIRouter(prefix="/chat", tags=["Chat"])
+
+
+@router.post("/sessions", response_model=ChatSessionResponse, status_code=status.HTTP_201_CREATED)
+async def create_session(
+    request: ChatSessionCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ChatSessionResponse:
+    session = await crud.create_chat_session(
+        db,
+        user_id=current_user.id,
+        subject=request.subject,
+        grade=request.grade,
+        title=request.title,
+    )
+    await db.commit()
+    return ChatSessionResponse.model_validate(session)
+
+
+@router.get("/sessions", response_model=list[ChatSessionResponse])
+async def list_sessions(
+    limit: int = 50,
+    offset: int = 0,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[ChatSessionResponse]:
+    sessions = await crud.get_user_chat_sessions(db, current_user.id, limit=limit, offset=offset)
+    return [ChatSessionResponse.model_validate(s) for s in sessions]
+
+
+@router.get("/sessions/{session_id}", response_model=ChatSessionDetailResponse)
+async def get_session(
+    session_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ChatSessionDetailResponse:
+    session = await crud.get_chat_session_with_messages(db, session_id, current_user.id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    return ChatSessionDetailResponse.model_validate(session)
+
+
+@router.put("/sessions/{session_id}/title", response_model=ChatSessionResponse)
+async def update_title(
+    session_id: uuid.UUID,
+    request: UpdateSessionTitleRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ChatSessionResponse:
+    updated = await crud.update_chat_session_title(db, session_id, current_user.id, request.title)
+    if not updated:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    session = await crud.get_chat_session(db, session_id, current_user.id)
+    return ChatSessionResponse.model_validate(session)
+
+
+@router.post("/sessions/{session_id}/messages", response_model=ChatReplyResponse)
+async def send_message(
+    session_id: uuid.UUID,
+    request: ChatMessageRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ChatReplyResponse:
+    session = await crud.get_chat_session_with_messages(db, session_id, current_user.id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    await crud.add_chat_message(db, session_id, role="user", content=request.question, key_concepts=[])
+
+    result = await run_chat_response(
+        subject=session.subject,
+        question=request.question,
+        session_id=None,  # history is managed in DB; agent gets context via messages below
+        grade=session.grade,
+    )
+
+    if result.get("error"):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=result["error"])
+
+    current_response: dict = result.get("current_response", {})
+    key_concepts: list[str] = current_response.get("key_concepts", [])
+
+    await crud.add_chat_message(
+        db,
+        session_id,
+        role="assistant",
+        content=result.get("current_response", {}).get("response", ""),
+        key_concepts=key_concepts,
+    )
+
+    suggested_title: str | None = result.get("title")
+    if suggested_title and suggested_title != session.title and session.title == "New Chat":
+        await crud.update_chat_session_title(db, session_id, current_user.id, suggested_title)
+
+    await db.commit()
+
+    return ChatReplyResponse(
+        session_id=session_id,
+        title=suggested_title or session.title,
+        current_response=current_response,
+        token_usage=result.get("token_usage"),
+    )
