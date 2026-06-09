@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import CacheTag from '../components/ui/CacheTag'
+import { useNavigate } from 'react-router-dom'
 import { getHistory, getHistoryByType } from '../services/history.service'
 import { typeIcon, subjectLabel } from '../lib/curriculum'
+import { loadGeneration, routeForType } from '../lib/genStorage'
 
 const FILTERS = [
   { key: 'all', label: 'All' },
@@ -15,12 +16,13 @@ export default function History() {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const navigate = useNavigate()
 
   useEffect(() => {
     setLoading(true)
     setError(null)
-    const fetch = filter === 'all' ? getHistory() : getHistoryByType(filter)
-    fetch
+    const req = filter === 'all' ? getHistory() : getHistoryByType(filter)
+    req
       .then(setItems)
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
@@ -32,26 +34,50 @@ export default function History() {
   }
 
   function itemTitle(item) {
-    const params = item.request_params ?? {}
-    const subject = subjectLabel(params.subject ?? '')
-    const grade = params.grade ? `Grade ${params.grade}` : ''
-    const unit = params.unit ? `Unit ${params.unit}` : ''
-    const count = params.num_questions
-      ? `${params.num_questions} questions`
-      : params.num_cards
-      ? `${params.num_cards} cards`
-      : ''
+    const p = item.request_params ?? {}
+    const subject = subjectLabel(p.subject ?? '')
+    const grade = p.grade ? `Grade ${p.grade}` : ''
+    const unit = p.unit ? `Unit ${p.unit}` : ''
     return [subject, grade, unit].filter(Boolean).join(' — ') || item.type
   }
 
   function itemMeta(item) {
-    const params = item.request_params ?? {}
+    const p = item.request_params ?? {}
     const parts = []
-    if (params.num_questions) parts.push(`${params.num_questions} questions`)
-    if (params.num_cards) parts.push(`${params.num_cards} cards`)
-    if (params.difficulty) parts.push(params.difficulty.charAt(0).toUpperCase() + params.difficulty.slice(1))
+    if (p.num_questions) parts.push(`${p.num_questions} questions`)
+    if (p.num_cards) parts.push(`${p.num_cards} cards`)
+    if (p.difficulty) parts.push(p.difficulty.charAt(0).toUpperCase() + p.difficulty.slice(1))
     if (item.accessed_at) parts.push(formatDate(item.accessed_at))
     return parts.join(' · ')
+  }
+
+  function scoreTag(item) {
+    if (item.type !== 'mcq') return null
+    const saved = loadGeneration(item.generation_id)
+    if (!saved?.score) return null
+    const { correct, total } = saved.score
+    const pct = Math.round((correct / total) * 100)
+    const color = pct >= 80 ? 'var(--highland)' : pct >= 50 ? 'var(--ochre-deep)' : 'var(--vermillion)'
+    const bg = pct >= 80 ? 'var(--highland-l)' : pct >= 50 ? 'var(--ochre-glow)' : 'var(--vermillion-l)'
+    return (
+      <span style={{
+        fontSize: 12,
+        fontWeight: 800,
+        padding: '3px 10px',
+        borderRadius: 20,
+        background: bg,
+        color,
+        flexShrink: 0,
+        fontFamily: 'var(--f-mono)',
+      }}>
+        {correct}/{total}
+      </span>
+    )
+  }
+
+  function handleOpen(item) {
+    const route = routeForType(item.type)
+    navigate(`${route}?gen=${item.generation_id}`)
   }
 
   return (
@@ -74,9 +100,7 @@ export default function History() {
         </div>
 
         {loading && (
-          <div style={{ textAlign: 'center', padding: 40, color: 'var(--ink-3)' }}>
-            Loading…
-          </div>
+          <div style={{ textAlign: 'center', padding: 40, color: 'var(--ink-3)' }}>Loading…</div>
         )}
 
         {error && (
@@ -93,13 +117,17 @@ export default function History() {
 
         <div className="hist-list">
           {items.map((item, i) => (
-            <div key={item.user_generation_id ?? i} className="hist-row anim">
+            <div
+              key={item.user_generation_id ?? i}
+              className="hist-row anim"
+              onClick={() => handleOpen(item)}
+            >
               <span className="h-ico">{typeIcon(item.type)}</span>
               <div className="h-info">
                 <div className="h-title">{itemTitle(item)}</div>
                 <div className="h-meta">{itemMeta(item)}</div>
               </div>
-              <CacheTag hit={item.was_cache_hit} />
+              {scoreTag(item)}
             </div>
           ))}
         </div>

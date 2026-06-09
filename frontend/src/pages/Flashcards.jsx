@@ -1,7 +1,9 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import ConfigPanel from '../components/ui/ConfigPanel'
 import EmptyState from '../components/ui/EmptyState'
 import { generateFlashcards } from '../services/flashcards.service'
+import { saveGeneration, loadGeneration } from '../lib/genStorage'
 
 const DEFAULT_CONFIG = {
   subject: 'biology',
@@ -12,6 +14,9 @@ const DEFAULT_CONFIG = {
 }
 
 export default function Flashcards() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const genId = searchParams.get('gen')
+
   const [config, setConfig] = useState(DEFAULT_CONFIG)
   const [cards, setCards] = useState([])
   const [loading, setLoading] = useState(false)
@@ -19,11 +24,21 @@ export default function Flashcards() {
   const [idx, setIdx] = useState(0)
   const [flipped, setFlipped] = useState(false)
 
+  useEffect(() => {
+    if (!genId) return
+    const saved = loadGeneration(genId)
+    if (saved) {
+      setCards(saved.cards ?? [])
+      if (saved.config) setConfig(saved.config)
+    }
+  }, [genId])
+
   function handleChange(key, value) {
     setConfig(prev => ({ ...prev, [key]: value }))
     setCards([])
     setIdx(0)
     setFlipped(false)
+    setSearchParams({})
   }
 
   async function handleGenerate() {
@@ -39,7 +54,10 @@ export default function Flashcards() {
         num_cards: config.numItems,
         difficulty: config.difficulty,
       })
-      setCards(res.flashcards ?? [])
+      const c = res.flashcards ?? []
+      setCards(c)
+      saveGeneration(res.generation_id, { type: 'flashcard', cards: c, config })
+      setSearchParams({ gen: res.generation_id })
     } catch (e) {
       setError(e.message)
     } finally {
@@ -66,14 +84,27 @@ export default function Flashcards() {
         <p>Tap to flip — reveal the answer</p>
       </div>
       <div className="pg-body">
-        <ConfigPanel
-          config={config}
-          onChange={handleChange}
-          onGenerate={handleGenerate}
-          loading={loading}
-          numItemsLabel="Cards"
-          generateLabel="Generate Flashcards"
-        />
+        {genId && cards.length > 0 ? (
+          <div style={{ marginBottom: 16 }}>
+            <button className="btn btn-ghost btn-sm" onClick={() => {
+              setSearchParams({})
+              setCards([])
+              setIdx(0)
+              setFlipped(false)
+            }}>
+              ← New Set
+            </button>
+          </div>
+        ) : (
+          <ConfigPanel
+            config={config}
+            onChange={handleChange}
+            onGenerate={handleGenerate}
+            loading={loading}
+            numItemsLabel="Cards"
+            generateLabel="Generate Flashcards"
+          />
+        )}
 
         {error && (
           <div style={{ color: 'var(--vermillion)', marginBottom: 16, fontSize: 14 }}>

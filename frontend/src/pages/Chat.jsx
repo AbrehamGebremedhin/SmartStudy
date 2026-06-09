@@ -65,9 +65,9 @@ export default function Chat() {
     }
   }
 
-  async function handleNewSession(subject, grade) {
+  async function handleNewSession(subject) {
     try {
-      const session = await createSession({ subject, grade })
+      const session = await createSession({ subject })
       setSessions(ss => [session, ...ss])
       setShowNewModal(false)
       navigate(`/chat/${session.id}`)
@@ -108,9 +108,18 @@ export default function Chat() {
 
       <div className="chat-wrap">
         {messages.length === 0 && !activeSession && (
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-3)', flexDirection: 'column', gap: 12 }}>
-            <div style={{ fontSize: 36, opacity: 0.3 }}>◉</div>
-            <div style={{ fontSize: 14 }}>Start a new session to ask your tutor</div>
+          <div
+            onClick={() => setShowNewModal(true)}
+            style={{
+              flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              flexDirection: 'column', gap: 14, cursor: 'pointer',
+            }}
+          >
+            <div style={{ fontSize: 36, opacity: 0.25, color: 'var(--ochre)' }}>◉</div>
+            <div style={{ fontSize: 14, color: 'var(--ink-3)' }}>No sessions yet</div>
+            <button className="btn btn-ochre btn-sm" onClick={e => { e.stopPropagation(); setShowNewModal(true) }}>
+              + New Session
+            </button>
           </div>
         )}
 
@@ -141,10 +150,14 @@ export default function Chat() {
         )}
 
         <div className="chat-bar">
-          <div className="cb-wrap">
+          <div
+            className="cb-wrap"
+            onClick={!activeSession ? () => setShowNewModal(true) : undefined}
+            style={!activeSession ? { cursor: 'pointer' } : undefined}
+          >
             <textarea
               className="cb-in"
-              placeholder={activeSession ? 'Ask anything about your subjects…' : 'Create a session first'}
+              placeholder={activeSession ? 'Ask anything about your subjects…' : 'Click to start a new session…'}
               value={input}
               disabled={!activeSession || sending}
               onChange={e => setInput(e.target.value)}
@@ -155,8 +168,13 @@ export default function Chat() {
                 }
               }}
               rows={1}
+              style={!activeSession ? { pointerEvents: 'none' } : undefined}
             />
-            <button className="cb-send" onClick={handleSend} disabled={!activeSession || sending}>
+            <button
+              className="cb-send"
+              onClick={!activeSession ? () => setShowNewModal(true) : handleSend}
+              disabled={sending}
+            >
               ↑
             </button>
           </div>
@@ -168,7 +186,6 @@ export default function Chat() {
 
 function NewSessionModal({ onConfirm, onCancel }) {
   const [subject, setSubject] = useState('biology')
-  const [grade, setGrade] = useState(12)
 
   return (
     <div style={{
@@ -184,21 +201,15 @@ function NewSessionModal({ onConfirm, onCancel }) {
         <h3 style={{ fontFamily: 'var(--f-display)', fontSize: 20, marginBottom: 20 }}>
           New Chat Session
         </h3>
-        <div className="cfg-f" style={{ marginBottom: 14 }}>
+        <div className="cfg-f" style={{ marginBottom: 24 }}>
           <label className="cfg-lbl">Subject</label>
           <select value={subject} onChange={e => setSubject(e.target.value)}>
             {ALL_SUBJECTS.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
           </select>
         </div>
-        <div className="cfg-f" style={{ marginBottom: 24 }}>
-          <label className="cfg-lbl">Grade</label>
-          <select value={grade} onChange={e => setGrade(Number(e.target.value))}>
-            {[9, 10, 11, 12].map(g => <option key={g} value={g}>Grade {g}</option>)}
-          </select>
-        </div>
         <div style={{ display: 'flex', gap: 10 }}>
           <button className="btn btn-ghost" style={{ flex: 1 }} onClick={onCancel}>Cancel</button>
-          <button className="btn btn-ochre" style={{ flex: 1 }} onClick={() => onConfirm(subject, grade)}>
+          <button className="btn btn-ochre" style={{ flex: 1 }} onClick={() => onConfirm(subject)}>
             Start Chat
           </button>
         </div>

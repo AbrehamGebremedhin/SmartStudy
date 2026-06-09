@@ -1,8 +1,10 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import ConfigPanel from '../components/ui/ConfigPanel'
 import DifficultyTag from '../components/ui/DifficultyTag'
 import EmptyState from '../components/ui/EmptyState'
 import { generateMCQ } from '../services/mcq.service'
+import { saveGeneration, loadGeneration, updateGeneration } from '../lib/genStorage'
 
 const DEFAULT_CONFIG = {
   subject: 'biology',
@@ -13,18 +15,38 @@ const DEFAULT_CONFIG = {
 }
 
 export default function MCQ() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const genId = searchParams.get('gen')
+
   const [config, setConfig] = useState(DEFAULT_CONFIG)
   const [questions, setQuestions] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [selected, setSelected] = useState({})
   const [revealed, setRevealed] = useState({})
+  const [currentGenId, setCurrentGenId] = useState(null)
+  const [hovered, setHovered] = useState(null) // { qi, letter }
+
+  // Restore from localStorage when navigated from history
+  useEffect(() => {
+    if (!genId) return
+    const saved = loadGeneration(genId)
+    if (saved) {
+      setQuestions(saved.questions ?? [])
+      setSelected(saved.selected ?? {})
+      setRevealed(saved.revealed ?? {})
+      setCurrentGenId(genId)
+      if (saved.config) setConfig(saved.config)
+    }
+  }, [genId])
 
   function handleChange(key, value) {
     setConfig(prev => ({ ...prev, [key]: value }))
     setQuestions([])
     setSelected({})
     setRevealed({})
+    setCurrentGenId(null)
+    setSearchParams({})
   }
 
   async function handleGenerate() {
@@ -32,6 +54,7 @@ export default function MCQ() {
     setError(null)
     setSelected({})
     setRevealed({})
+    setCurrentGenId(null)
     try {
       const res = await generateMCQ({
         subject: config.subject,
@@ -40,7 +63,12 @@ export default function MCQ() {
         num_questions: config.numItems,
         difficulty: config.difficulty,
       })
-      setQuestions(res.questions ?? [])
+      const qs = res.questions ?? []
+      const gid = res.generation_id
+      setQuestions(qs)
+      setCurrentGenId(gid)
+      saveGeneration(gid, { type: 'mcq', questions: qs, config, selected: {}, revealed: {} })
+      setSearchParams({ gen: gid })
     } catch (e) {
       setError(e.message)
     } finally {
@@ -50,9 +78,35 @@ export default function MCQ() {
 
   function pick(qi, letter) {
     if (revealed[qi]) return
-    setSelected(p => ({ ...p, [qi]: letter }))
-    setRevealed(p => ({ ...p, [qi]: true }))
+    const newSelected = { ...selected, [qi]: letter }
+    const newRevealed = { ...revealed, [qi]: true }
+    setSelected(newSelected)
+    setRevealed(newRevealed)
+
+    if (currentGenId) {
+      const allDone = questions.length > 0 &&
+        Object.keys(newRevealed).length === questions.length
+      const updates = { selected: newSelected, revealed: newRevealed }
+      if (allDone) {
+        const correct = questions.filter((q, i) => newSelected[i] === q.correct_answer).length
+        updates.score = { correct, total: questions.length }
+        updates.completedAt = new Date().toISOString()
+      }
+      updateGeneration(currentGenId, updates)
+    }
   }
+
+  const allAnswered = questions.length > 0 &&
+    Object.keys(revealed).length === questions.length
+
+  const score = allAnswered
+    ? {
+        correct: questions.filter((q, i) => selected[i] === q.correct_answer).length,
+        total: questions.length,
+      }
+    : null
+
+  const showConfig = !genId
 
   return (
     <>
@@ -61,15 +115,32 @@ export default function MCQ() {
         <p>Curriculum-based questions with explanations</p>
       </div>
       <div className="pg-body">
-        <ConfigPanel
-          config={config}
-          onChange={handleChange}
-          onGenerate={handleGenerate}
-          loading={loading}
-          numItemsLabel="Questions"
-          generateLabel="Generate Questions"
-          excludeSubjects={['sat']}
-        />
+        {showConfig ? (
+          <ConfigPanel
+            config={config}
+            onChange={handleChange}
+            onGenerate={handleGenerate}
+            loading={loading}
+            numItemsLabel="Questions"
+            generateLabel="Generate Questions"
+            excludeSubjects={['sat']}
+          />
+        ) : (
+          <div style={{ marginBottom: 16 }}>
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => {
+                setSearchParams({})
+                setQuestions([])
+                setSelected({})
+                setRevealed({})
+                setCurrentGenId(null)
+              }}
+            >
+              ← New Quiz
+            </button>
+          </div>
+        )}
 
         {error && (
           <div style={{ color: 'var(--vermillion)', marginBottom: 16, fontSize: 14 }}>
@@ -84,6 +155,9 @@ export default function MCQ() {
             description="Configure above and tap Generate to create practice questions from your textbook content."
           />
         )}
+
+        {/* If exam is complete, show results first, then questions below */}
+        {allAnswered && score && <MCQResults questions={questions} selected={selected} score={score} />}
 
         {questions.map((q, qi) => {
           const isRevealed = revealed[qi]
@@ -115,16 +189,35 @@ export default function MCQ() {
                 <div className="mcq-opts">
                   {options.map((opt, oi) => {
                     const letter = opt[0]
+                    const isCorrect = letter === correct
+                    const isSelected = letter === userAnswer
+                    const tooltipText = isRevealed && !isCorrect
+                      ? q.incorrect_explanations?.[letter]
+                      : null
+                    const showTooltip =
+                      tooltipText &&
+                      hovered?.qi === qi &&
+                      hovered?.letter === letter
+
                     let cls = 'mcq-opt'
-                    if (isRevealed) {
-                      if (letter === correct) cls += ' ok'
-                      else if (letter === userAnswer) cls += ' no'
-                    }
+                    if (isRevealed && isCorrect) cls += ' ok'
+                    else if (isRevealed && isSelected && !isCorrect) cls += ' no'
+
                     return (
-                      <button key={oi} className={cls} onClick={() => pick(qi, letter)}>
-                        <span className="o-let">{letter}</span>
-                        <span>{opt.slice(3)}</span>
-                      </button>
+                      <div key={oi} className="opt-wrap">
+                        <button
+                          className={cls}
+                          onClick={() => pick(qi, letter)}
+                          onMouseEnter={() => tooltipText && setHovered({ qi, letter })}
+                          onMouseLeave={() => setHovered(null)}
+                        >
+                          <span className="o-let">{letter}</span>
+                          <span>{opt.slice(3)}</span>
+                        </button>
+                        {showTooltip && (
+                          <div className="opt-tooltip">✗ {tooltipText}</div>
+                        )}
+                      </div>
                     )
                   })}
                 </div>
@@ -150,5 +243,51 @@ export default function MCQ() {
         })}
       </div>
     </>
+  )
+}
+
+function MCQResults({ questions, selected, score }) {
+  const pct = Math.round((score.correct / score.total) * 100)
+  const band = pct >= 80 ? 'band-high' : pct >= 50 ? 'band-mid' : 'band-low'
+  const label = pct >= 80 ? 'Excellent' : pct >= 50 ? 'Keep Practicing' : 'Needs Work'
+
+  return (
+    <div className="mcq-results anim" style={{ marginBottom: 24 }}>
+      <div className="results-header">
+        <div className="results-title">Exam Complete</div>
+        <div className="results-score">
+          <span className="score-num">{score.correct}</span>
+          <span className="score-sep">/{score.total}</span>
+          <span className="score-pct">{pct}%</span>
+        </div>
+        <div className={`score-band ${band}`}>{label}</div>
+      </div>
+
+      <table className="results-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Topic</th>
+            <th>Your Answer</th>
+            <th>Correct</th>
+            <th>Result</th>
+          </tr>
+        </thead>
+        <tbody>
+          {questions.map((q, qi) => {
+            const isCorrect = selected[qi] === q.correct_answer
+            return (
+              <tr key={qi} className={isCorrect ? 'row-ok' : 'row-no'}>
+                <td>{qi + 1}</td>
+                <td className="topic-cell">{q.topic ?? `Q${qi + 1}`}</td>
+                <td>{selected[qi] ?? '—'}</td>
+                <td>{q.correct_answer}</td>
+                <td>{isCorrect ? '✓' : '✗'}</td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
   )
 }
