@@ -19,3 +19,6 @@ euee_output/
 # Tests results
 test_results/
 
+# frontend build files
+frontend/dist/
+frontend/node_modules/
