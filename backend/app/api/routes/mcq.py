@@ -18,17 +18,17 @@ router = APIRouter(prefix="/mcq", tags=["MCQ"])
 @limiter.limit("200/day")
 @limiter.limit("10/minute")
 async def generate_mcqs(
-    http_request: Request,
-    request: MCQRequest,
+    request: Request,
+    body: MCQRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> MCQResponse:
     params = {
-        "subject": request.subject,
-        "grade": request.grade,
-        "unit": request.unit,
-        "num_questions": request.num_questions,
-        "difficulty": request.difficulty,
+        "subject": body.subject,
+        "grade": body.grade,
+        "unit": body.unit,
+        "num_questions": body.num_questions,
+        "difficulty": body.difficulty,
     }
     request_hash = compute_request_hash(params)
 
@@ -41,15 +41,15 @@ async def generate_mcqs(
             generation_id=cached.id,
             was_cache_hit=True,
             questions=cached.content["questions"],
-            difficulty=cached.content.get("difficulty", request.difficulty),
+            difficulty=cached.content.get("difficulty", body.difficulty),
         )
 
     result = await run_generate_mcqs(
-        subject=request.subject,
-        grade=request.grade,
-        unit=request.unit,
-        num_questions=request.num_questions,
-        difficulty=request.difficulty,
+        subject=body.subject,
+        grade=body.grade,
+        unit=body.unit,
+        num_questions=body.num_questions,
+        difficulty=body.difficulty,
     )
 
     if result.get("error"):
@@ -62,7 +62,7 @@ async def generate_mcqs(
         generation_type="mcq",
         request_hash=request_hash,
         request_params=params,
-        content={"questions": result["questions"], "difficulty": result.get("difficulty", request.difficulty)},
+        content={"questions": result["questions"], "difficulty": result.get("difficulty", body.difficulty)},
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         cost_usd=cost_usd,
@@ -74,6 +74,6 @@ async def generate_mcqs(
         generation_id=generation.id,
         was_cache_hit=False,
         questions=result["questions"],
-        difficulty=result.get("difficulty", request.difficulty),
+        difficulty=result.get("difficulty", body.difficulty),
         token_usage=result.get("token_usage"),
     )

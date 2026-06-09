@@ -77,9 +77,9 @@ async def update_title(
 @limiter.limit("500/day")
 @limiter.limit("30/minute")
 async def send_message(
-    http_request: Request,
+    request: Request,
     session_id: uuid.UUID,
-    request: ChatMessageRequest,
+    body: ChatMessageRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ChatReplyResponse:
@@ -94,11 +94,11 @@ async def send_message(
         if m.content
     )
 
-    await crud.add_chat_message(db, session_id, role="user", content=request.question, key_concepts=[])
+    await crud.add_chat_message(db, session_id, role="user", content=body.question, key_concepts=[])
 
     result = await run_chat_response(
         subject=session.subject,
-        question=request.question,
+        question=body.question,
         session_id=None,
         grade=session.grade,
         chat_history_str=chat_history_str,

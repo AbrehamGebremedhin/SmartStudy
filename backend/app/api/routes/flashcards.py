@@ -18,18 +18,18 @@ router = APIRouter(prefix="/flashcards", tags=["Flashcards"])
 @limiter.limit("200/day")
 @limiter.limit("10/minute")
 async def generate_flashcards(
-    http_request: Request,
-    request: FlashcardRequest,
+    request: Request,
+    body: FlashcardRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> FlashcardResponse:
     params = {
-        "subject": request.subject,
-        "grade": request.grade,
-        "unit": request.unit,
-        "topic": request.topic,
-        "num_cards": request.num_cards,
-        "difficulty": request.difficulty,
+        "subject": body.subject,
+        "grade": body.grade,
+        "unit": body.unit,
+        "topic": body.topic,
+        "num_cards": body.num_cards,
+        "difficulty": body.difficulty,
     }
     request_hash = compute_request_hash(params)
 
@@ -42,16 +42,16 @@ async def generate_flashcards(
             generation_id=cached.id,
             was_cache_hit=True,
             flashcards=cached.content["flashcards"],
-            difficulty=cached.content.get("difficulty", request.difficulty),
+            difficulty=cached.content.get("difficulty", body.difficulty),
         )
 
     result = await run_generate_flashcards(
-        subject=request.subject,
-        grade=request.grade,
-        unit=request.unit,
-        topic=request.topic,
-        num_cards=request.num_cards,
-        difficulty=request.difficulty,
+        subject=body.subject,
+        grade=body.grade,
+        unit=body.unit,
+        topic=body.topic,
+        num_cards=body.num_cards,
+        difficulty=body.difficulty,
     )
 
     if result.get("error"):
@@ -64,7 +64,7 @@ async def generate_flashcards(
         generation_type="flashcard",
         request_hash=request_hash,
         request_params=params,
-        content={"flashcards": result["flashcards"], "difficulty": result.get("difficulty", request.difficulty)},
+        content={"flashcards": result["flashcards"], "difficulty": result.get("difficulty", body.difficulty)},
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         cost_usd=cost_usd,
@@ -76,6 +76,6 @@ async def generate_flashcards(
         generation_id=generation.id,
         was_cache_hit=False,
         flashcards=result["flashcards"],
-        difficulty=result.get("difficulty", request.difficulty),
+        difficulty=result.get("difficulty", body.difficulty),
         token_usage=result.get("token_usage"),
     )

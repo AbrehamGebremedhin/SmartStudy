@@ -18,17 +18,17 @@ router = APIRouter(prefix="/notes", tags=["Notes"])
 @limiter.limit("200/day")
 @limiter.limit("10/minute")
 async def generate_notes(
-    http_request: Request,
-    request: NotesRequest,
+    request: Request,
+    body: NotesRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> NotesResponse:
     params = {
-        "subject": request.subject,
-        "topic": request.topic,
-        "grade": request.grade,
-        "unit": request.unit,
-        "version": request.version,
+        "subject": body.subject,
+        "topic": body.topic,
+        "grade": body.grade,
+        "unit": body.unit,
+        "version": body.version,
     }
     request_hash = compute_request_hash(params)
 
@@ -44,11 +44,11 @@ async def generate_notes(
         )
 
     result = await run_generate_notes(
-        subject=request.subject,
-        topic=request.topic,
-        grade=request.grade,
-        unit=request.unit,
-        version=request.version,
+        subject=body.subject,
+        topic=body.topic,
+        grade=body.grade,
+        unit=body.unit,
+        version=body.version,
     )
 
     if result.get("error"):

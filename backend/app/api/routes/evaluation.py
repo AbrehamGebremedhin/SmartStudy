@@ -16,16 +16,16 @@ router = APIRouter(prefix="/evaluate", tags=["Evaluation"])
 @limiter.limit("300/day")
 @limiter.limit("20/minute")
 async def evaluate_answer(
-    http_request: Request,
-    request: EvaluateAnswerRequest,
+    request: Request,
+    body: EvaluateAnswerRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> EvaluateAnswerResponse:
     result = await run_evaluate_answer(
-        subject=request.subject,
-        question=request.question,
-        student_answer=request.student_answer,
-        note=request.note,
+        subject=body.subject,
+        question=body.question,
+        student_answer=body.student_answer,
+        note=body.note,
     )
 
     if result.get("error"):
