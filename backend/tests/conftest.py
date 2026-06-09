@@ -138,6 +138,19 @@ async def client(
 
 
 # ---------------------------------------------------------------------------
+# Reset rate-limiter storage between tests so per-minute/per-day counters
+# from one test don't bleed into the next.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limiter():
+    from app.security.rate_limiter import limiter
+    yield
+    limiter._storage.reset()
+
+
+# ---------------------------------------------------------------------------
 # Unauthenticated client (no auth override — only DB override)
 # ---------------------------------------------------------------------------
 
