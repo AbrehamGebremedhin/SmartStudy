@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -7,6 +7,7 @@ from app.db.database import get_db
 from app.db.models import User
 from app.schemas.requests import FlashcardRequest
 from app.schemas.responses import FlashcardResponse
+from app.security.rate_limiter import limiter
 from app.services.cache import _parse_token_usage, compute_request_hash
 from app.services.generation import run_generate_flashcards
 
@@ -14,7 +15,10 @@ router = APIRouter(prefix="/flashcards", tags=["Flashcards"])
 
 
 @router.post("/generate", response_model=FlashcardResponse)
+@limiter.limit("200/day")
+@limiter.limit("10/minute")
 async def generate_flashcards(
+    http_request: Request,
     request: FlashcardRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),

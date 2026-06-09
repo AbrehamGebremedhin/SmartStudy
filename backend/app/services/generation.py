@@ -15,6 +15,8 @@ if _agents_dir not in sys.path:
 
 from GenerationAgent import GenerationAgent  # noqa: E402  (after sys.path patch)
 
+from app.security.output_sanitizer import sanitize_output
+
 _agent: GenerationAgent | None = None
 
 
@@ -33,13 +35,14 @@ async def run_generate_mcqs(
     difficulty: str,
 ) -> dict:
     agent = get_agent()
-    return await agent.generate_mcqs(
+    result = await agent.generate_mcqs(
         subject=subject,
         grade=grade,
         unit=unit,
         num_questions=num_questions,
         difficulty=difficulty,
     )
+    return sanitize_output(result)
 
 
 async def run_generate_flashcards(
@@ -51,7 +54,7 @@ async def run_generate_flashcards(
     difficulty: str,
 ) -> dict:
     agent = get_agent()
-    return await agent.generate_flashcards(
+    result = await agent.generate_flashcards(
         subject=subject,
         grade=grade,
         unit=unit,
@@ -59,6 +62,7 @@ async def run_generate_flashcards(
         num_cards=num_cards,
         difficulty=difficulty,
     )
+    return sanitize_output(result)
 
 
 async def run_generate_notes(
@@ -69,13 +73,14 @@ async def run_generate_notes(
     version: str,
 ) -> dict:
     agent = get_agent()
-    return await agent.generate_notes(
+    result = await agent.generate_notes(
         subject=subject,
         topic=topic,
         grade=grade,
         unit=unit,
         version=version,
     )
+    return sanitize_output(result)
 
 
 async def run_chat_response(
@@ -86,13 +91,14 @@ async def run_chat_response(
     chat_history_str: str = "",
 ) -> dict:
     agent = get_agent()
-    return await agent.chat_response(
+    result = await agent.chat_response(
         subject=subject,
         question=question,
         session_id=session_id,
         grade=grade,
         chat_history_str=chat_history_str,
     )
+    return sanitize_output(result)
 
 
 async def run_evaluate_answer(
@@ -102,9 +108,10 @@ async def run_evaluate_answer(
     note: dict | None,
 ) -> dict:
     agent = get_agent()
-    return await agent.evaluate_practice_answer(
+    result = await agent.evaluate_practice_answer(
         subject=subject,
         question=question,
         student_answer=student_answer,
         note=note,
     )
+    return sanitize_output(result)

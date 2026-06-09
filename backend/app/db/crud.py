@@ -6,14 +6,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.expression import func
 
 from app.config import settings
-from app.db.models import ChatMessage, ChatSession, Generation, User, UserGeneration
+from app.db.models import ChatMessage, ChatSession, Generation, SecurityEvent, User, UserGeneration
 
 
 # ---------------------------------------------------------------------------
 # Users
 # ---------------------------------------------------------------------------
 
-async def get_or_create_user(db: AsyncSession, clerk_id: str, email: str) -> User:
+async def get_or_create_user(db: AsyncSession, clerk_id: str, email: str) -> tuple[User, bool]:
+    """Return (user, created) where created=True if the user was just created."""
     result = await db.execute(select(User).where(User.google_id == clerk_id))
     user = result.scalar_one_or_none()
 
@@ -21,13 +22,15 @@ async def get_or_create_user(db: AsyncSession, clerk_id: str, email: str) -> Use
         user = User(google_id=clerk_id, email=email)
         db.add(user)
         await db.flush()
-    else:
-        user.last_seen_at = datetime.now(timezone.utc)
-        user.email = email
+        await db.commit()
+        await db.refresh(user)
+        return user, True
 
+    user.last_seen_at = datetime.now(timezone.utc)
+    user.email = email
     await db.commit()
     await db.refresh(user)
-    return user
+    return user, False
 
 
 # ---------------------------------------------------------------------------
@@ -227,3 +230,25 @@ async def add_chat_message(
     await db.flush()
     await db.refresh(message)
     return message
+
+
+# ---------------------------------------------------------------------------
+# Security events
+# ---------------------------------------------------------------------------
+
+async def log_security_event(
+    db: AsyncSession,
+    endpoint: str,
+    field_name: str,
+    event_type: str,
+    user_id: uuid.UUID | None = None,
+) -> None:
+    """Fire-and-forget write; caller must commit."""
+    event = SecurityEvent(
+        user_id=user_id,
+        endpoint=endpoint,
+        field_name=field_name,
+        event_type=event_type,
+    )
+    db.add(event)
+    await db.flush()

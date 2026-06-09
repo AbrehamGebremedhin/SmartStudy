@@ -9,8 +9,11 @@ wheels/
 # Virtual environments
 .venv
 
-# Environment variables
+# Environment variables — never commit real credentials
 .env
+**/.env
+*.env.local
+*.env.production
 
 # Resource files
 Resource/

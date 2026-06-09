@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -6,13 +6,17 @@ from app.db.database import get_db
 from app.db.models import User
 from app.schemas.requests import EvaluateAnswerRequest
 from app.schemas.responses import EvaluateAnswerResponse
+from app.security.rate_limiter import limiter
 from app.services.generation import run_evaluate_answer
 
 router = APIRouter(prefix="/evaluate", tags=["Evaluation"])
 
 
 @router.post("", response_model=EvaluateAnswerResponse)
+@limiter.limit("300/day")
+@limiter.limit("20/minute")
 async def evaluate_answer(
+    http_request: Request,
     request: EvaluateAnswerRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),

@@ -1,6 +1,6 @@
-from typing import Literal
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -11,12 +11,15 @@ from app.schemas.responses import HistoryItemResponse
 
 router = APIRouter(prefix="/history", tags=["History"])
 
+PaginationLimit = Annotated[int, Query(ge=1, le=200, description="Number of items to return")]
+PaginationOffset = Annotated[int, Query(ge=0, le=1_000_000, description="Number of items to skip")]
+
 
 @router.get("/{generation_type}", response_model=list[HistoryItemResponse])
 async def get_history(
     generation_type: Literal["mcq", "flashcard", "notes"],
-    limit: int = 50,
-    offset: int = 0,
+    limit: PaginationLimit = 50,
+    offset: PaginationOffset = 0,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[HistoryItemResponse]:
@@ -38,8 +41,8 @@ async def get_history(
 
 @router.get("/", response_model=list[HistoryItemResponse])
 async def get_all_history(
-    limit: int = 50,
-    offset: int = 0,
+    limit: PaginationLimit = 50,
+    offset: PaginationOffset = 0,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[HistoryItemResponse]:
