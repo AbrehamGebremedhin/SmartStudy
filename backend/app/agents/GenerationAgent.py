@@ -754,6 +754,35 @@ class GenerationAgent:
             if context_response.error:
                 return {"error": context_response.error}
 
+            # Verify the requested topic is actually covered by the retrieved curriculum
+            # content before spending tokens on generation.
+            key_concepts = context_response.parsed_answer.get("key_concepts", [])
+            coverage = await self.validation_agent.validate_topic_coverage(
+                topic=topic,
+                key_concepts=key_concepts,
+                subject=subject,
+                grade=grade,
+                unit=unit,
+            )
+            if not coverage.get("is_covered", True):
+                available = coverage.get("available_topics", [])
+                suffix = (
+                    f" Topics available in this unit: {', '.join(available)}."
+                    if available else ""
+                )
+                scope = f"{subject.title()}"
+                if grade:
+                    scope += f" Grade {grade}"
+                if unit:
+                    scope += f" Unit {unit}"
+                return {
+                    "error": "topic_not_in_unit",
+                    "message": (
+                        f"'{topic}' is not covered in the {scope} curriculum.{suffix}"
+                    ),
+                    "available_topics": available,
+                }
+
             subject_rules = get_subject_rules(subject)
             subject_focus = get_subject_focus(subject) or "- No additional subject focus."
             grounding_rule = get_grounding_rule(subject)

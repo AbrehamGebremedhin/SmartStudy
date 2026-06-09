@@ -384,3 +384,68 @@ class ValidationAgent:
                 "token_usage": str(_zero)
             }
 
+    async def validate_topic_coverage(
+        self,
+        topic: str,
+        key_concepts: List[str],
+        subject: str,
+        grade: int | None,
+        unit: str | None,
+    ) -> Dict[str, Any]:
+        """Check whether a requested notes topic is covered by the retrieved curriculum concepts.
+
+        Uses the already-extracted key_concepts list (not the full documents) so the prompt
+        stays small.  Fails open — if the LLM call fails the caller should proceed with
+        generation rather than blocking the user.
+        """
+        _zero = TokenCount(0, 0, 0.0)
+        if not key_concepts:
+            return {"is_covered": True, "available_topics": [], "token_usage": str(_zero)}
+
+        grade_unit_str = ""
+        if grade is not None:
+            grade_unit_str += f" Grade {grade}"
+        if unit is not None:
+            grade_unit_str += f" Unit {unit}"
+
+        concepts_text = "\n".join(f"- {c}" for c in key_concepts)
+
+        prompt = PromptTemplate.from_template("""
+            A student requested notes on: "{topic}"
+
+            The following concepts are available in {subject}{grade_unit} curriculum content:
+            {concepts}
+
+            Is "{topic}" directly covered by, or closely related to, any of those concepts?
+            Consider synonyms and related terminology (e.g. "ATP synthesis" covers "adenosine
+            triphosphate production").
+
+            Return JSON only:
+            {{
+                "is_covered": true_or_false,
+                "reason": "one sentence",
+                "available_topics": ["up to 5 most relevant concepts from the list above"]
+            }}
+        """)
+
+        try:
+            response = await self._run_chain(prompt, {
+                "topic": topic,
+                "subject": subject,
+                "grade_unit": grade_unit_str,
+                "concepts": concepts_text,
+            })
+            result = json.loads(str(response))
+            token_usage = self.record_token_usage(
+                f"{topic}\n{subject}\n{concepts_text}",
+                str(result),
+            )
+            return {
+                "is_covered": result.get("is_covered", True),
+                "available_topics": result.get("available_topics", []),
+                "reason": result.get("reason", ""),
+                "token_usage": str(token_usage),
+            }
+        except Exception:
+            # Fail open — validation hiccups must never block legitimate requests.
+            return {"is_covered": True, "available_topics": [], "token_usage": str(_zero)}

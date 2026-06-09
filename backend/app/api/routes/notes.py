@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.core.curriculum_validation import validate_curriculum_params
 from app.db import crud
 from app.db.database import get_db
 from app.db.models import User
@@ -23,6 +24,8 @@ async def generate_notes(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> NotesResponse:
+    validate_curriculum_params(body.subject, body.grade, body.unit)
+
     params = {
         "subject": body.subject,
         "topic": body.topic,
@@ -52,7 +55,27 @@ async def generate_notes(
     )
 
     if result.get("error"):
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=result["error"])
+        error_code = result["error"]
+        if error_code == "topic_not_in_unit":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=result.get("message", error_code),
+            )
+        if "No relevant documents found" in str(error_code):
+            scope = body.subject.title()
+            if body.grade:
+                scope += f" Grade {body.grade}"
+            if body.unit:
+                scope += f" Unit {body.unit}"
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"No curriculum content found for {scope}. "
+                    "Check that the subject, grade, and unit are correct, "
+                    "then try rephrasing the topic."
+                ),
+            )
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=error_code)
 
     input_tokens, output_tokens, cost_usd = _parse_token_usage(result.get("token_usage"))
 

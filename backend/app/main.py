@@ -9,6 +9,7 @@ from slowapi.errors import RateLimitExceeded
 
 from app.api.routes import chat, evaluation, flashcards, history, mcq, notes
 from app.config import settings
+from app.core.exceptions import OutOfContextError
 from app.db.database import Base, engine, get_db
 from app.logging_config import configure_logging
 from app.security.audit import INJECTION_ATTEMPT, RATE_LIMIT_EXCEEDED, record
@@ -62,6 +63,18 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONRe
     return JSONResponse(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         content={"detail": "Rate limit exceeded. Please slow down."},
+    )
+
+
+@app.exception_handler(OutOfContextError)
+async def out_of_context_handler(request: Request, exc: OutOfContextError) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "error": "out_of_context",
+            "message": exc.message,
+            "valid_options": exc.valid_options,
+        },
     )
 
 

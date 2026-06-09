@@ -27,6 +27,31 @@ export function getUnitCount(grade, subject) {
   return VALID_UNITS[grade]?.[subject] ?? 5
 }
 
+/** Returns null if valid, or an error string describing the problem. */
+export function validateCurriculumParams(grade, subject, unit) {
+  const CROSS_GRADE = ['sat', 'english']
+  if (CROSS_GRADE.includes(subject)) return null
+  if (grade == null) return null
+
+  const gradeData = VALID_UNITS[grade]
+  if (!gradeData) return `Grade ${grade} is not available. Valid grades are 9–12.`
+
+  if (!(subject in gradeData)) {
+    const available = Object.keys(gradeData).join(', ')
+    return `'${subject}' is not offered in Grade ${grade}. Available: ${available}.`
+  }
+
+  if (unit != null) {
+    const unitNum = Number(unit)
+    const max = gradeData[subject]
+    if (!Number.isInteger(unitNum) || unitNum < 1 || unitNum > max) {
+      return `Unit ${unit} doesn't exist for ${subject} Grade ${grade}. Valid units are 1–${max}.`
+    }
+  }
+
+  return null
+}
+
 export function getDaysUntilEUEE() {
   const d = new Date('2027-05-15')
   return Math.max(0, Math.ceil((d - new Date()) / 86400000))

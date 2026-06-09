@@ -5,6 +5,8 @@ from langchain_core.documents import Document
 from langchain_ollama import OllamaEmbeddings
 from pymilvus import MilvusClient
 
+from app.core.exceptions import OutOfContextError
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -57,27 +59,41 @@ class RetrievalAgent:
 
     def _validate_subject_exists(self, subject: str) -> None:
         if subject not in self.KNOWN_SUBJECTS:
-            raise ValueError(f"Subject '{subject}' does not exist in the records")
+            raise OutOfContextError(
+                f"Subject '{subject}' is not available. "
+                f"Valid subjects: {', '.join(sorted(self.KNOWN_SUBJECTS))}.",
+                valid_options={"subjects": sorted(self.KNOWN_SUBJECTS)},
+            )
 
     def _validate_request(self, subject: str, grade: Optional[int], unit: Optional[str]) -> None:
         if grade is not None:
             if grade not in self.VALID_COMBINATIONS:
-                raise ValueError(f"Invalid grade: {grade}. Must be between 9-12")
+                raise OutOfContextError(
+                    f"Grade {grade} is not available. Valid grades: 9, 10, 11, 12.",
+                    valid_options={"grades": [9, 10, 11, 12]},
+                )
             if subject not in self.VALID_COMBINATIONS[grade]:
-                raise ValueError(f"Invalid subject '{subject}' for grade {grade}")
+                available = sorted(self.VALID_COMBINATIONS[grade].keys())
+                raise OutOfContextError(
+                    f"'{subject.title()}' is not offered in Grade {grade}. "
+                    f"Available subjects for Grade {grade}: {', '.join(available)}.",
+                    valid_options={"subjects": available},
+                )
             if unit is not None:
                 try:
                     unit_num = int(unit)
-                    max_units = self.VALID_COMBINATIONS[grade][subject]
-                    if unit_num < 1 or unit_num > max_units:
-                        raise ValueError(
-                            f"Invalid unit {unit} for {subject} grade {grade}. "
-                            f"Must be between 1 and {max_units}"
-                        )
-                except ValueError as e:
-                    if "invalid literal for int()" in str(e):
-                        raise ValueError("Unit must be a number")
-                    raise
+                except (ValueError, TypeError):
+                    raise OutOfContextError(
+                        "Unit must be a number.",
+                        valid_options={},
+                    )
+                max_units = self.VALID_COMBINATIONS[grade][subject]
+                if unit_num < 1 or unit_num > max_units:
+                    raise OutOfContextError(
+                        f"Unit {unit_num} does not exist for {subject.title()} Grade {grade}. "
+                        f"Valid units are 1–{max_units}.",
+                        valid_options={"units": list(range(1, max_units + 1))},
+                    )
 
     def _build_filter(self, subject: str, grade: Optional[int], unit: Optional[str], type_req: str) -> str:
         parts = [f'subject == "{subject}"']

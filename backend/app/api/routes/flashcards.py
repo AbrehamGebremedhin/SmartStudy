@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.core.curriculum_validation import validate_curriculum_params
 from app.db import crud
 from app.db.database import get_db
 from app.db.models import User
@@ -23,6 +24,8 @@ async def generate_flashcards(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> FlashcardResponse:
+    validate_curriculum_params(body.subject, body.grade, body.unit)
+
     params = {
         "subject": body.subject,
         "grade": body.grade,

@@ -1,3 +1,4 @@
+import re
 import uuid
 from typing import Annotated
 
@@ -5,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.core.curriculum_validation import CROSS_GRADE_SUBJECTS, VALID_COMBINATIONS
 from app.db import crud
 from app.db.database import get_db
 from app.db.models import User
@@ -17,6 +19,41 @@ router = APIRouter(prefix="/chat", tags=["Chat"])
 
 PaginationLimit = Annotated[int, Query(ge=1, le=200, description="Number of items to return")]
 PaginationOffset = Annotated[int, Query(ge=0, le=1_000_000, description="Number of items to skip")]
+
+
+def _check_question_scope(question: str, subject: str, grade: int | None) -> str | None:
+    """Return a user-facing message if the question explicitly references out-of-scope content.
+
+    Returns None when nothing unusual is detected so normal flow continues.
+    """
+    # Detect explicit references to a different grade
+    grade_matches = re.findall(r"\bgrade\s*(\d+)\b", question, re.IGNORECASE)
+    for raw in grade_matches:
+        ref_grade = int(raw)
+        if grade is not None and ref_grade != grade and ref_grade in VALID_COMBINATIONS:
+            return (
+                f"This session covers {subject.title()} for Grade {grade}. "
+                f"Grade {ref_grade} content isn't available here — "
+                f"please start a new session and select Grade {ref_grade} to ask about it."
+            )
+
+    # Detect unit numbers outside the valid range for this session
+    if (
+        grade is not None
+        and subject not in CROSS_GRADE_SUBJECTS
+        and subject in VALID_COMBINATIONS.get(grade, {})
+    ):
+        max_units = VALID_COMBINATIONS[grade][subject]
+        unit_matches = re.findall(r"\bunit\s*(\d+)\b", question, re.IGNORECASE)
+        for raw in unit_matches:
+            ref_unit = int(raw)
+            if ref_unit < 1 or ref_unit > max_units:
+                return (
+                    f"{subject.title()} Grade {grade} covers units 1–{max_units}. "
+                    f"Unit {ref_unit} doesn't exist in this curriculum."
+                )
+
+    return None
 
 
 @router.post("/sessions", response_model=ChatSessionResponse, status_code=status.HTTP_201_CREATED)
@@ -94,6 +131,19 @@ async def send_message(
         if m.content
     )
 
+    # Pre-check: detect explicit grade/unit references outside this session's scope
+    scope_msg = _check_question_scope(body.question, session.subject, session.grade)
+    if scope_msg:
+        await crud.add_chat_message(db, session_id, role="user", content=body.question, key_concepts=[])
+        await crud.add_chat_message(db, session_id, role="assistant", content=scope_msg, key_concepts=[])
+        await db.commit()
+        return ChatReplyResponse(
+            session_id=session_id,
+            title=session.title,
+            current_response={"answer": scope_msg, "key_concepts": [], "follow_up_questions": []},
+            token_usage=None,
+        )
+
     await crud.add_chat_message(db, session_id, role="user", content=body.question, key_concepts=[])
 
     result = await run_chat_response(
@@ -105,7 +155,27 @@ async def send_message(
     )
 
     if result.get("error"):
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=result["error"])
+        error_msg = result["error"]
+        # Empty context means no curriculum content matched — return a helpful chat message
+        # instead of an HTTP error so the conversation stays intact.
+        if "No relevant documents found" in error_msg:
+            no_ctx_msg = (
+                f"I couldn't find curriculum content matching your question for "
+                f"{session.subject.title()}"
+                + (f" Grade {session.grade}" if session.grade else "")
+                + ". Try rephrasing, or check that the topic is covered in this subject."
+            )
+            await crud.add_chat_message(
+                db, session_id, role="assistant", content=no_ctx_msg, key_concepts=[]
+            )
+            await db.commit()
+            return ChatReplyResponse(
+                session_id=session_id,
+                title=session.title,
+                current_response={"answer": no_ctx_msg, "key_concepts": [], "follow_up_questions": []},
+                token_usage=None,
+            )
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=error_msg)
 
     if result.get("out_of_scope"):
         history = result.get("conversation_history", [])
