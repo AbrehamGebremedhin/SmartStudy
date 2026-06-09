@@ -92,7 +92,7 @@ class EvaluateAnswerRequest(BaseModel):
     subject: ValidSubject
     question: dict
     student_answer: str = Field(min_length=1, max_length=5000)
-    note: dict | None = None
+    note: dict | str | None = None
 
     @field_validator("student_answer", mode="before")
     @classmethod
