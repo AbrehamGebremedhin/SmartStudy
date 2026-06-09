@@ -118,7 +118,7 @@ async def send_message(
         return ChatReplyResponse(
             session_id=session_id,
             title=session.title,
-            current_response={"key_concepts": [], "follow_up_questions": []},
+            current_response={"answer": out_of_scope_text, "key_concepts": [], "follow_up_questions": []},
             token_usage=result.get("token_usage"),
         )
 
@@ -128,6 +128,7 @@ async def send_message(
     history = result.get("conversation_history", [])
     assistant_msg = next((m for m in reversed(history) if m["role"] == "assistant"), {})
     answer_text = assistant_msg.get("message", "")
+    current_response["answer"] = answer_text
 
     await crud.add_chat_message(
         db,

@@ -49,6 +49,7 @@ async def get_current_user(
         )
 
     user, created = await get_or_create_user(db, clerk_id=google_id, email=email)
+    http_request.state.user = user
 
     if created:
         await record(

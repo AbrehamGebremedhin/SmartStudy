@@ -9,7 +9,7 @@ from slowapi.errors import RateLimitExceeded
 
 from app.api.routes import chat, evaluation, flashcards, history, mcq, notes
 from app.config import settings
-from app.db.database import engine, get_db
+from app.db.database import Base, engine, get_db
 from app.logging_config import configure_logging
 from app.security.audit import INJECTION_ATTEMPT, RATE_LIMIT_EXCEEDED, record
 from app.security.headers import SecurityHeadersMiddleware
@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
     yield
     await engine.dispose()
 

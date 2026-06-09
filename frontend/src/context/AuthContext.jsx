@@ -2,6 +2,8 @@ import { createContext, useContext, useEffect, useState, useCallback } from 'rea
 
 const AuthContext = createContext(null)
 
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID
+
 function decodeJwt(token) {
   try {
     const payload = token.split('.')[1]
@@ -52,6 +54,27 @@ export function AuthProvider({ children }) {
       sub: payload.sub,
     })
   }, [])
+
+  useEffect(() => {
+    if (!user) return
+    const interval = setInterval(() => {
+      const token = localStorage.getItem('ss_token')
+      if (!token || !tokenIsValid(token)) {
+        window.dispatchEvent(new Event('ss:logout'))
+        return
+      }
+      const payload = decodeJwt(token)
+      const msUntilExpiry = payload ? payload.exp * 1000 - Date.now() : 0
+      if (msUntilExpiry < 5 * 60 * 1000 && window.google?.accounts?.id) {
+        window.google.accounts.id.initialize({
+          client_id: GOOGLE_CLIENT_ID,
+          callback: ({ credential }) => login(credential),
+        })
+        window.google.accounts.id.prompt()
+      }
+    }, 60_000)
+    return () => clearInterval(interval)
+  }, [user, login])
 
   const logout = useCallback(() => {
     localStorage.removeItem('ss_token')
