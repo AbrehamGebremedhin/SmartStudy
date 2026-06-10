@@ -27,6 +27,7 @@ export default function MCQ() {
     ...DEFAULT_CONFIG,
     subject: searchParams.get('subject') || DEFAULT_CONFIG.subject,
     grade: searchParams.get('grade') ? Number(searchParams.get('grade')) : DEFAULT_CONFIG.grade,
+    unit: searchParams.get('unit') || DEFAULT_CONFIG.unit,
     topic: searchParams.get('topic') || DEFAULT_CONFIG.topic,
   }))
   const [questions, setQuestions] = useState([])
@@ -143,7 +144,7 @@ export default function MCQ() {
             numItemsLabel="Questions"
             generateLabel="Generate Questions"
             excludeSubjects={['sat']}
-            showTopic={!fromNote && !fromChat}
+            showTopic={false}
           />
         ) : (
           <div style={{ marginBottom: 16 }}>
@@ -184,7 +185,7 @@ export default function MCQ() {
               <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'flex-end' }}>
                 <button
                   className="btn btn-ghost btn-sm"
-                  onClick={() => navigate(`/notes?subject=${config.subject}&grade=${config.grade}&topic=${encodeURIComponent(config.topic)}`)}
+                  onClick={() => navigate(`/notes?subject=${config.subject}&grade=${config.grade}&unit=${config.unit}&topic=${encodeURIComponent(config.topic)}`)}
                 >
                   Generate Notes on "{config.topic}" →
                 </button>

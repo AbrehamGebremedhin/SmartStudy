@@ -110,6 +110,22 @@ async def update_title(
     return ChatSessionResponse.model_validate(session)
 
 
+@router.get("/sessions/{session_id}/context")
+async def get_session_context(
+    session_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Return the most likely grade and unit for this session by querying the vector DB."""
+    session = await crud.get_chat_session(db, session_id, current_user.id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    from app.services.generation import run_chat_context
+    result = await run_chat_context(subject=session.subject, grade=session.grade, title=session.title)
+    return {"grade": result.get("grade"), "unit": result.get("unit")}
+
+
 @router.post("/sessions/{session_id}/messages", response_model=ChatReplyResponse)
 @limiter.limit("500/day")
 @limiter.limit("30/minute")
@@ -218,5 +234,7 @@ async def send_message(
         session_id=session_id,
         title=suggested_title or session.title,
         current_response=current_response,
+        context_grade=result.get("context_grade"),
+        context_unit=result.get("context_unit"),
         token_usage=result.get("token_usage"),
     )

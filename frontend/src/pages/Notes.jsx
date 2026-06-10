@@ -158,14 +158,14 @@ export default function Notes() {
               <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink-3)', marginRight: 4 }}>Study with:</span>
               <button
                 className="btn btn-ochre btn-sm"
-                onClick={() => navigate(`/mcq?from_note=${currentGenId}&subject=${config.subject}&grade=${config.grade}&topic=${encodeURIComponent(notes.title || config.topic)}`)}
+                onClick={() => navigate(`/mcq?from_note=${currentGenId}&subject=${config.subject}&grade=${config.grade}&unit=${config.unit}&topic=${encodeURIComponent(notes.title || config.topic)}`)}
               >
                 Practice MCQs
               </button>
               <button
                 className="btn btn-sm"
                 style={{ background: 'var(--indigo)', color: '#fff' }}
-                onClick={() => navigate(`/flashcards?from_note=${currentGenId}&subject=${config.subject}&grade=${config.grade}&topic=${encodeURIComponent(notes.title || config.topic)}`)}
+                onClick={() => navigate(`/flashcards?from_note=${currentGenId}&subject=${config.subject}&grade=${config.grade}&unit=${config.unit}&topic=${encodeURIComponent(notes.title || config.topic)}`)}
               >
                 Create Flashcards
               </button>

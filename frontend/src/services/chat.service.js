@@ -19,3 +19,7 @@ export function updateSessionTitle(sessionId, title) {
 export function sendMessage(sessionId, question) {
   return api.post(`/chat/sessions/${sessionId}/messages`, { question })
 }
+
+export function getSessionContext(sessionId) {
+  return api.get(`/chat/sessions/${sessionId}/context`)
+}

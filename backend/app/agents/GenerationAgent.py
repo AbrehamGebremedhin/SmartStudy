@@ -813,6 +813,32 @@ class GenerationAgent:
                 str(parsed_response)
             )
 
+            # Extract grade/unit from retrieved document metadata so the frontend
+            # can pre-fill MCQ/Flashcard/Notes when navigating from chat.
+            context_grade = None
+            context_unit = None
+            docs = context_response.context
+            if isinstance(docs, list) and docs:
+                from collections import Counter
+                units = []
+                grades = []
+                for doc in docs:
+                    if not hasattr(doc, "metadata"):
+                        continue
+                    u = doc.metadata.get("unit")
+                    g = doc.metadata.get("grade")
+                    if u is not None and str(u).strip():
+                        units.append(str(u).strip())
+                    if g is not None and str(g).strip():
+                        grades.append(str(g).strip())
+                if units:
+                    context_unit = Counter(units).most_common(1)[0][0]
+                if grades:
+                    try:
+                        context_grade = int(Counter(grades).most_common(1)[0][0])
+                    except (ValueError, TypeError):
+                        pass
+
             return {
                 "title": session.title,
                 "session_id": session_id,
@@ -821,6 +847,8 @@ class GenerationAgent:
                     "key_concepts": key_concepts,
                     "follow_up_questions": parsed_response.get("follow_up_questions", []),
                 },
+                "context_grade": context_grade,
+                "context_unit": context_unit,
                 "error": None,
                 "token_usage": str(token_usage),
             }

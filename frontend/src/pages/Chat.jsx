@@ -7,6 +7,7 @@ import {
   createSession,
   sendMessage,
   updateSessionTitle,
+  getSessionContext,
 } from '../services/chat.service'
 
 export default function Chat() {
@@ -20,6 +21,8 @@ export default function Chat() {
   const [sending, setSending] = useState(false)
   const [error, setError] = useState(null)
   const [showNewModal, setShowNewModal] = useState(false)
+  const [contextGrade, setContextGrade] = useState(null)
+  const [contextUnit, setContextUnit] = useState(null)
 
   const endRef = useRef(null)
 
@@ -29,9 +32,35 @@ export default function Chat() {
 
   useEffect(() => {
     if (sessionId) {
+      // Restore from sessionStorage immediately if available
+      let hasCached = false
+      try {
+        const saved = sessionStorage.getItem(`ctx_${sessionId}`)
+        if (saved) {
+          const { grade, unit } = JSON.parse(saved)
+          setContextGrade(grade ?? null)
+          setContextUnit(unit ?? null)
+          hasCached = true
+        }
+      } catch { /* ignore */ }
+      if (!hasCached) {
+        setContextGrade(null)
+        setContextUnit(null)
+      }
+
       getSession(sessionId).then(s => {
         setActiveSession(s)
         setMessages(s.messages ?? [])
+        // If no cached context and session has messages, fetch grade/unit from vector DB
+        if (!hasCached && (s.messages?.length ?? 0) > 0) {
+          getSessionContext(sessionId).then(ctx => {
+            if (ctx.grade) setContextGrade(ctx.grade)
+            if (ctx.unit) setContextUnit(ctx.unit)
+            if (ctx.grade || ctx.unit) {
+              sessionStorage.setItem(`ctx_${sessionId}`, JSON.stringify({ grade: ctx.grade, unit: ctx.unit }))
+            }
+          }).catch(() => {})
+        }
       }).catch(console.error)
     } else if (sessions.length > 0) {
       navigate(`/chat/${sessions[0].id}`, { replace: true })
@@ -57,6 +86,13 @@ export default function Chat() {
       if (res.title && res.title !== activeSession.title) {
         setActiveSession(s => ({ ...s, title: res.title }))
         setSessions(ss => ss.map(s => s.id === activeSession.id ? { ...s, title: res.title } : s))
+      }
+      if (res.context_grade || res.context_unit) {
+        const grade = res.context_grade ?? contextGrade
+        const unit = res.context_unit ?? contextUnit
+        if (res.context_grade) setContextGrade(res.context_grade)
+        if (res.context_unit) setContextUnit(res.context_unit)
+        sessionStorage.setItem(`ctx_${activeSession.id}`, JSON.stringify({ grade, unit }))
       }
     } catch (e) {
       setError(e.message)
@@ -112,21 +148,21 @@ export default function Chat() {
           <button
             className="btn btn-ghost btn-sm"
             style={{ fontSize: 12 }}
-            onClick={() => navigate(`/notes?from_chat=${activeSession.id}&subject=${activeSession.subject}${activeSession.grade ? `&grade=${activeSession.grade}` : ''}&topic=${encodeURIComponent(activeSession.title)}`)}
+            onClick={() => { const g = contextGrade || activeSession.grade; const u = contextUnit; navigate(`/notes?from_chat=${activeSession.id}&subject=${activeSession.subject}${g ? `&grade=${g}` : ''}${u ? `&unit=${u}` : ''}&topic=${encodeURIComponent(activeSession.title)}`) }}
           >
             Generate Notes
           </button>
           <button
             className="btn btn-ghost btn-sm"
             style={{ fontSize: 12 }}
-            onClick={() => navigate(`/mcq?from_chat=${activeSession.id}&subject=${activeSession.subject}${activeSession.grade ? `&grade=${activeSession.grade}` : ''}`)}
+            onClick={() => { const g = contextGrade || activeSession.grade; const u = contextUnit; navigate(`/mcq?from_chat=${activeSession.id}&subject=${activeSession.subject}${g ? `&grade=${g}` : ''}${u ? `&unit=${u}` : ''}`) }}
           >
             Practice MCQs
           </button>
           <button
             className="btn btn-ghost btn-sm"
             style={{ fontSize: 12 }}
-            onClick={() => navigate(`/flashcards?from_chat=${activeSession.id}&subject=${activeSession.subject}${activeSession.grade ? `&grade=${activeSession.grade}` : ''}`)}
+            onClick={() => { const g = contextGrade || activeSession.grade; const u = contextUnit; navigate(`/flashcards?from_chat=${activeSession.id}&subject=${activeSession.subject}${g ? `&grade=${g}` : ''}${u ? `&unit=${u}` : ''}`) }}
           >
             Create Flashcards
           </button>

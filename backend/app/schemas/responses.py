@@ -64,6 +64,8 @@ class ChatReplyResponse(BaseModel):
     session_id: uuid.UUID
     title: str
     current_response: dict
+    context_grade: int | None = None
+    context_unit: str | None = None
     token_usage: str | None = None
 
 

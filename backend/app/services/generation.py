@@ -129,6 +129,40 @@ async def run_chat_response(
     return sanitize_output(result)
 
 
+async def run_chat_context(subject: str, grade: int | None, title: str) -> dict:
+    """Query the vector DB using the session title to extract the most likely grade and unit."""
+    from collections import Counter
+    gen_agent = get_agent()
+    question = title if title and title != "New Chat" else f"context for {subject}"
+    ctx = await gen_agent.context_agent.query_db(
+        subject=subject, question=question, grade=grade, unit=None, type_req="chat"
+    )
+    if ctx.error or not isinstance(ctx.context, list) or not ctx.context:
+        return {"grade": grade, "unit": None}
+
+    units, grades = [], []
+    for doc in ctx.context:
+        if not hasattr(doc, "metadata"):
+            continue
+        u = doc.metadata.get("unit")
+        g = doc.metadata.get("grade")
+        if u is not None and str(u).strip():
+            units.append(str(u).strip())
+        if g is not None and str(g).strip():
+            grades.append(str(g).strip())
+
+    result_grade = grade
+    result_unit = None
+    if grades:
+        try:
+            result_grade = int(Counter(grades).most_common(1)[0][0])
+        except (ValueError, TypeError):
+            pass
+    if units:
+        result_unit = Counter(units).most_common(1)[0][0]
+    return {"grade": result_grade, "unit": result_unit}
+
+
 async def run_evaluate_answer(
     subject: str,
     question: dict,

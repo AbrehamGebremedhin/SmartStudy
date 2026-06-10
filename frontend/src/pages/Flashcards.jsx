@@ -26,6 +26,7 @@ export default function Flashcards() {
     ...DEFAULT_CONFIG,
     subject: searchParams.get('subject') || DEFAULT_CONFIG.subject,
     grade: searchParams.get('grade') ? Number(searchParams.get('grade')) : DEFAULT_CONFIG.grade,
+    unit: searchParams.get('unit') || DEFAULT_CONFIG.unit,
     topic: searchParams.get('topic') || DEFAULT_CONFIG.topic,
   }))
   const [cards, setCards] = useState([])
@@ -122,7 +123,7 @@ export default function Flashcards() {
             loading={loading}
             numItemsLabel="Cards"
             generateLabel="Generate Flashcards"
-            showTopic={!fromNote && !fromChat}
+            showTopic={false}
           />
         )}
 
@@ -144,7 +145,7 @@ export default function Flashcards() {
           <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'flex-end' }}>
             <button
               className="btn btn-ghost btn-sm"
-              onClick={() => navigate(`/notes?subject=${config.subject}&grade=${config.grade}&topic=${encodeURIComponent(config.topic)}`)}
+              onClick={() => navigate(`/notes?subject=${config.subject}&grade=${config.grade}&unit=${config.unit}&topic=${encodeURIComponent(config.topic)}`)}
             >
               Generate Notes on "{config.topic}" →
             </button>
