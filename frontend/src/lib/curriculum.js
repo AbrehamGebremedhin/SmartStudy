@@ -1,15 +1,15 @@
 export const ALL_SUBJECTS = [
-  { id: 'biology', label: 'Biology', icon: '🧬', color: '#4a7c59' },
-  { id: 'chemistry', label: 'Chemistry', icon: '⚗️', color: '#8b6914' },
-  { id: 'physics', label: 'Physics', icon: '⚡', color: '#6b3a5c' },
-  { id: 'maths', label: 'Mathematics', icon: '📐', color: '#4a5a8b' },
-  { id: 'english', label: 'English', icon: '📖', color: '#7c4a2d' },
-  { id: 'civics', label: 'Civics', icon: '🏛️', color: '#6b5b73' },
-  { id: 'economics', label: 'Economics', icon: '📊', color: '#2d6a4f' },
-  { id: 'geography', label: 'Geography', icon: '🌍', color: '#3a6b8c' },
-  { id: 'history', label: 'History', icon: '📜', color: '#8b5e3c' },
-  { id: 'general_business', label: 'Business', icon: '💼', color: '#5a5a3c' },
-  { id: 'sat', label: 'SAT', icon: '🎯', color: '#8b3a3a' },
+  { id: 'biology', label: 'Biology', icon: 'biology', color: '#4a7c59' },
+  { id: 'chemistry', label: 'Chemistry', icon: 'chemistry', color: '#8b6914' },
+  { id: 'physics', label: 'Physics', icon: 'physics', color: '#6b3a5c' },
+  { id: 'maths', label: 'Mathematics', icon: 'maths', color: '#4a5a8b' },
+  { id: 'english', label: 'English', icon: 'english', color: '#7c4a2d' },
+  { id: 'civics', label: 'Civics', icon: 'civics', color: '#6b5b73' },
+  { id: 'economics', label: 'Economics', icon: 'economics', color: '#2d6a4f' },
+  { id: 'geography', label: 'Geography', icon: 'geography', color: '#3a6b8c' },
+  { id: 'history', label: 'History', icon: 'history-subject', color: '#8b5e3c' },
+  { id: 'general_business', label: 'Business', icon: 'business', color: '#5a5a3c' },
+  { id: 'sat', label: 'SAT', icon: 'target', color: '#8b3a3a' },
 ]
 
 export const GRADES = [9, 10, 11, 12]
@@ -63,9 +63,9 @@ export function subjectLabel(id) {
 
 export function typeIcon(type) {
   switch (type) {
-    case 'mcq': return '✦'
-    case 'flashcard': return '▣'
-    case 'notes': return '≡'
-    default: return '◆'
+    case 'mcq': return 'quiz'
+    case 'flashcard': return 'cards'
+    case 'notes': return 'notes'
+    default: return 'sparkle'
   }
 }

@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { ALL_SUBJECTS } from '../lib/curriculum'
+import Icon from '../components/ui/Icon'
+import { awardXP } from '../lib/gamification'
 import {
   listSessions,
   getSession,
@@ -82,6 +84,7 @@ export default function Chat() {
       const res = await sendMessage(activeSession.id, question)
       const answerText = res.current_response?.answer ?? res.current_response?.content ?? ''
       setMessages(m => [...m, { role: 'assistant', content: answerText, id: Date.now() + 1 }])
+      awardXP('chat_question', { subject: activeSession.subject })
 
       if (res.title && res.title !== activeSession.title) {
         setActiveSession(s => ({ ...s, title: res.title }))
@@ -143,8 +146,8 @@ export default function Chat() {
       )}
 
       {activeSession && messages.length > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', background: 'var(--sandstone)', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginRight: 4 }}>Study tools:</span>
+        <div className="chat-context-bar">
+          <span className="chat-context-label">Study tools:</span>
           <button
             className="btn btn-ghost btn-sm"
             style={{ fontSize: 12 }}
@@ -178,7 +181,7 @@ export default function Chat() {
               flexDirection: 'column', gap: 14, cursor: 'pointer',
             }}
           >
-            <div style={{ fontSize: 36, opacity: 0.25, color: 'var(--ochre)' }}>◉</div>
+            <div className="chat-empty-ico"><Icon name="tutor" size={36} stroke={1.5} /></div>
             <div style={{ fontSize: 14, color: 'var(--ink-3)' }}>No sessions yet</div>
             <button className="btn btn-ochre btn-sm" onClick={e => { e.stopPropagation(); setShowNewModal(true) }}>
               + New Session
@@ -192,14 +195,16 @@ export default function Chat() {
               <div className="c-av">
                 {m.role === 'user' ? userInitial : 'S'}
               </div>
-              <div className="c-bub">{m.content}</div>
+              <div className="c-bub">
+                <MessageContent text={m.content} />
+              </div>
             </div>
           ))}
           {sending && (
             <div className="c-msg assistant">
               <div className="c-av">S</div>
-              <div className="c-bub" style={{ color: 'var(--ink-3)' }}>
-                <span className="pulse">Thinking…</span>
+              <div className="c-bub">
+                <span className="typing" aria-label="Tutor is thinking"><i /><i /><i /></span>
               </div>
             </div>
           )}
@@ -237,8 +242,9 @@ export default function Chat() {
               className="cb-send"
               onClick={!activeSession ? () => setShowNewModal(true) : handleSend}
               disabled={sending}
+              aria-label="Send message"
             >
-              ↑
+              <Icon name="send" size={19} />
             </button>
           </div>
         </div>
@@ -247,20 +253,54 @@ export default function Chat() {
   )
 }
 
+function InlineText({ text }) {
+  const re = /(`[^`\n]+`|\*\*[^*\n]+\*\*|[A-Za-z0-9]+\^[A-Za-z0-9]+)/g
+  const parts = []
+  let last = 0
+  let m
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) parts.push(text.slice(last, m.index))
+    const tok = m[0]
+    if (tok.startsWith('`')) {
+      parts.push(<code key={m.index}>{tok.slice(1, -1)}</code>)
+    } else if (tok.startsWith('**')) {
+      parts.push(<strong key={m.index}>{tok.slice(2, -2)}</strong>)
+    } else {
+      const [base, exp] = tok.split('^')
+      parts.push(<span key={m.index}>{base}<sup>{exp}</sup></span>)
+    }
+    last = m.index + tok.length
+  }
+  if (last < text.length) parts.push(text.slice(last))
+  return <>{parts}</>
+}
+
+function MessageContent({ text }) {
+  if (!text) return null
+  const codeBlockRe = /```([\s\S]*?)```/g
+  const result = []
+  let lastIndex = 0
+  let match
+  while ((match = codeBlockRe.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      result.push(<InlineText key={lastIndex} text={text.slice(lastIndex, match.index)} />)
+    }
+    const code = match[1].replace(/^\w+\n/, '').trim()
+    result.push(<pre key={match.index}>{code}</pre>)
+    lastIndex = match.index + match[0].length
+  }
+  if (lastIndex < text.length) {
+    result.push(<InlineText key={lastIndex} text={text.slice(lastIndex)} />)
+  }
+  return <>{result}</>
+}
+
 function NewSessionModal({ onConfirm, onCancel }) {
   const [subject, setSubject] = useState('biology')
 
   return (
-    <div style={{
-      position: 'fixed', inset: 0, background: 'rgba(30,22,16,0.5)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      zIndex: 200, padding: 16,
-    }}>
-      <div style={{
-        background: 'var(--card)', borderRadius: 'var(--r-xl)',
-        padding: 32, width: '100%', maxWidth: 380,
-        boxShadow: 'var(--sh-3)',
-      }}>
+    <div className="modal-backdrop">
+      <div className="modal-card">
         <h3 style={{ fontFamily: 'var(--f-display)', fontSize: 20, marginBottom: 20 }}>
           New Chat Session
         </h3>

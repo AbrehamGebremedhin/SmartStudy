@@ -3,6 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import { getHistory, getHistoryByType } from '../services/history.service'
 import { typeIcon, subjectLabel } from '../lib/curriculum'
 import { loadGeneration, routeForType } from '../lib/genStorage'
+import { getLevelInfo, getStreak, getStats, getAchievements } from '../lib/gamification'
+import Icon from '../components/ui/Icon'
+import EmptyState from '../components/ui/EmptyState'
 
 const FILTERS = [
   { key: 'all', label: 'All' },
@@ -16,7 +19,15 @@ export default function History() {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [showAch, setShowAch] = useState(false)
   const navigate = useNavigate()
+
+  // localStorage reads are idempotent — safe as lazy initializers under StrictMode
+  const [level] = useState(() => getLevelInfo())
+  const [streak] = useState(() => getStreak())
+  const [stats] = useState(() => getStats())
+  const [achievements] = useState(() => getAchievements())
+  const unlockedCount = achievements.filter(a => a.unlockedAt).length
 
   useEffect(() => {
     setLoading(true)
@@ -52,27 +63,22 @@ export default function History() {
   }
 
   function scoreTag(item) {
-    if (item.type !== 'mcq') return null
     const saved = loadGeneration(item.generation_id)
-    if (!saved?.score) return null
-    const { correct, total } = saved.score
-    const pct = Math.round((correct / total) * 100)
-    const color = pct >= 80 ? 'var(--highland)' : pct >= 50 ? 'var(--ochre-deep)' : 'var(--vermillion)'
-    const bg = pct >= 80 ? 'var(--highland-l)' : pct >= 50 ? 'var(--ochre-glow)' : 'var(--vermillion-l)'
-    return (
-      <span style={{
-        fontSize: 12,
-        fontWeight: 800,
-        padding: '3px 10px',
-        borderRadius: 20,
-        background: bg,
-        color,
-        flexShrink: 0,
-        fontFamily: 'var(--f-mono)',
-      }}>
-        {correct}/{total}
-      </span>
-    )
+    if (!saved) return null
+    if (item.type === 'mcq' && saved.score) {
+      const { correct, total } = saved.score
+      const pct = Math.round((correct / total) * 100)
+      const cls = pct >= 80 ? 'hs-high' : pct >= 50 ? 'hs-mid' : 'hs-low'
+      return <span className={`h-score ${cls}`}>{correct}/{total}</span>
+    }
+    if (item.type === 'flashcard' && saved.ratings && saved.cards?.length) {
+      const known = saved.cards.filter((_, i) => saved.ratings[i] === 'known').length
+      if (Object.keys(saved.ratings).length === 0) return null
+      const pct = Math.round((known / saved.cards.length) * 100)
+      const cls = pct >= 80 ? 'hs-high' : pct >= 50 ? 'hs-mid' : 'hs-low'
+      return <span className={`h-score ${cls}`}>{known}/{saved.cards.length}</span>
+    }
+    return null
   }
 
   function handleOpen(item) {
@@ -83,11 +89,71 @@ export default function History() {
   return (
     <>
       <div className="pg-top">
-        <h2>History</h2>
-        <p>Past generated content</p>
+        <h2>Progress</h2>
+        <p>Your journey, achievements, and past sessions</p>
       </div>
       <div className="pg-body">
-        <div style={{ display: 'flex', gap: 6, marginBottom: 18, flexWrap: 'wrap' }}>
+        <div className="ins-strip anim">
+          <div className="ins-box">
+            <div className="ins-v ins-geez">{level.geez}</div>
+            <div className="ins-l">{level.xp} XP · {level.translation}</div>
+          </div>
+          <div className="ins-box">
+            <div className="ins-v ins-flame">
+              <Icon name="flame" size={17} /> {streak.current}
+            </div>
+            <div className="ins-l">Day streak · best {streak.best}</div>
+          </div>
+          <div className="ins-box">
+            <div className="ins-v">{stats.questionsAnswered}</div>
+            <div className="ins-l">Questions answered</div>
+          </div>
+          <div className="ins-box">
+            <div className="ins-v">{stats.accuracyPct != null ? `${stats.accuracyPct}%` : '—'}</div>
+            <div className="ins-l">Accuracy</div>
+          </div>
+        </div>
+
+        {stats.perSubject.length > 0 && (
+          <div className="ins-subjects anim">
+            {stats.perSubject.slice(0, 5).map(s => (
+              <div key={s.id} className="ins-subj-row">
+                <span className="ins-subj-name">{subjectLabel(s.id)}</span>
+                <div className="ins-subj-bar">
+                  <div className="ins-subj-fill" style={{ '--w': `${s.pct}%` }} />
+                </div>
+                <span className="ins-subj-pct">{s.pct}%</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <button
+          className={`ach-toggle${showAch ? ' open' : ''}`}
+          onClick={() => setShowAch(o => !o)}
+        >
+          <Icon name="trophy" size={16} />
+          Achievements ({unlockedCount}/{achievements.length})
+          <Icon name="chevron-right" size={14} className="ach-toggle-chev" />
+        </button>
+
+        {showAch && (
+          <div className="ach-grid anim">
+            {achievements.map(a => (
+              <div key={a.id} className={`ach-tile${a.unlockedAt ? '' : ' locked'}`}>
+                <div className="ach-ico">
+                  <Icon name={a.unlockedAt ? a.icon : 'lock'} size={20} />
+                </div>
+                <div className="ach-name">{a.name}{a.geez ? ` · ${a.geez}` : ''}</div>
+                <div className="ach-desc">{a.desc}</div>
+                {a.unlockedAt && <div className="ach-date">{formatDate(a.unlockedAt)}</div>}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="sec-head">Past Sessions</div>
+        <div className="filter-row">
           {FILTERS.map(f => (
             <button
               key={f.key}
@@ -100,19 +166,21 @@ export default function History() {
         </div>
 
         {loading && (
-          <div style={{ textAlign: 'center', padding: 40, color: 'var(--ink-3)' }}>Loading…</div>
+          <div className="list-loading">Loading…</div>
         )}
 
         {error && (
-          <div style={{ color: 'var(--vermillion)', fontSize: 14 }}>{error}</div>
+          <div className="form-error">{error}</div>
         )}
 
         {!loading && !error && items.length === 0 && (
-          <div className="empty">
-            <div className="empty-i">↻</div>
-            <h3>No History Yet</h3>
-            <p>Generate MCQs, flashcards, or notes to see them here.</p>
-          </div>
+          <EmptyState
+            icon="history"
+            title="No History Yet"
+            description="Generate MCQs, flashcards, or notes to see them here."
+            actionLabel="Generate your first quiz"
+            onAction={() => navigate('/mcq')}
+          />
         )}
 
         <div className="hist-list">
@@ -122,7 +190,7 @@ export default function History() {
               className="hist-row anim"
               onClick={() => handleOpen(item)}
             >
-              <span className="h-ico">{typeIcon(item.type)}</span>
+              <span className="h-ico"><Icon name={typeIcon(item.type)} size={20} /></span>
               <div className="h-info">
                 <div className="h-title">{itemTitle(item)}</div>
                 <div className="h-meta">{itemMeta(item)}</div>

@@ -3,8 +3,12 @@ import { useSearchParams, useNavigate } from 'react-router-dom'
 import ConfigPanel from '../components/ui/ConfigPanel'
 import DifficultyTag from '../components/ui/DifficultyTag'
 import EmptyState from '../components/ui/EmptyState'
+import Icon from '../components/ui/Icon'
+import Confetti from '../components/ui/Confetti'
+import LoadingState from '../components/ui/LoadingState'
 import { generateMCQ } from '../services/mcq.service'
 import { saveGeneration, loadGeneration, updateGeneration } from '../lib/genStorage'
+import { awardXP, recordLastGen, resultMessage } from '../lib/gamification'
 
 const DEFAULT_CONFIG = {
   subject: 'biology',
@@ -37,6 +41,8 @@ export default function MCQ() {
   const [revealed, setRevealed] = useState({})
   const [currentGenId, setCurrentGenId] = useState(null)
   const [hovered, setHovered] = useState(null) // { qi, letter }
+  const [isRetake, setIsRetake] = useState(false) // retakes earn no XP
+  const [xpEarned, setXpEarned] = useState(0)
 
   // Restore from localStorage when navigated from history
   useEffect(() => {
@@ -47,6 +53,8 @@ export default function MCQ() {
       setSelected(saved.selected ?? {})
       setRevealed(saved.revealed ?? {})
       setCurrentGenId(genId)
+      setIsRetake(Boolean(saved.completedAt))
+      setXpEarned(saved.xpEarned ?? 0)
       if (saved.config) setConfig(saved.config)
     }
   }, [genId])
@@ -57,6 +65,8 @@ export default function MCQ() {
     setSelected({})
     setRevealed({})
     setCurrentGenId(null)
+    setIsRetake(false)
+    setXpEarned(0)
     setSearchParams({})
   }
 
@@ -81,8 +91,12 @@ export default function MCQ() {
       const gid = res.generation_id
       setQuestions(qs)
       setCurrentGenId(gid)
+      setIsRetake(false)
+      setXpEarned(0)
       saveGeneration(gid, { type: 'mcq', questions: qs, config, selected: {}, revealed: {} })
       setSearchParams({ gen: gid })
+      awardXP('gen_mcq', { subject: config.subject })
+      recordLastGen({ type: 'mcq', genId: gid, subject: config.subject, grade: config.grade, unit: config.unit, topic: config.topic })
     } catch (e) {
       setError(e.message)
     } finally {
@@ -97,17 +111,50 @@ export default function MCQ() {
     setSelected(newSelected)
     setRevealed(newRevealed)
 
-    if (currentGenId) {
-      const allDone = questions.length > 0 &&
-        Object.keys(newRevealed).length === questions.length
-      const updates = { selected: newSelected, revealed: newRevealed }
+    const allDone = questions.length > 0 &&
+      Object.keys(newRevealed).length === questions.length
+    const correct = allDone
+      ? questions.filter((q, i) => newSelected[i] === q.correct_answer).length
+      : 0
+
+    let gainedNow = 0
+    if (!isRetake) {
+      const isCorrect = letter === questions[qi]?.correct_answer
+      gainedNow += awardXP(isCorrect ? 'mcq_correct' : 'mcq_incorrect', { subject: config.subject }).gained
       if (allDone) {
-        const correct = questions.filter((q, i) => newSelected[i] === q.correct_answer).length
+        gainedNow += awardXP('quiz_complete', { correct, total: questions.length, subject: config.subject }).gained
+      }
+    }
+    if (gainedNow > 0) setXpEarned(x => x + gainedNow)
+
+    if (currentGenId) {
+      const existing = loadGeneration(currentGenId)
+      const updates = { selected: newSelected, revealed: newRevealed }
+      if (gainedNow > 0) updates.xpEarned = (existing?.xpEarned ?? 0) + gainedNow
+      if (allDone) {
         updates.score = { correct, total: questions.length }
         updates.completedAt = new Date().toISOString()
+        if (!isRetake) updates.xpAwarded = true
       }
       updateGeneration(currentGenId, updates)
     }
+  }
+
+  function handleNewQuiz() {
+    setSearchParams({})
+    setQuestions([])
+    setSelected({})
+    setRevealed({})
+    setCurrentGenId(null)
+    setIsRetake(false)
+    setXpEarned(0)
+  }
+
+  function handleRetry() {
+    setSelected({})
+    setRevealed({})
+    setIsRetake(true)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   const allAnswered = questions.length > 0 &&
@@ -130,8 +177,9 @@ export default function MCQ() {
       </div>
       <div className="pg-body">
         {(fromNote || fromChat) && !genId && (
-          <div style={{ padding: '10px 14px', background: 'var(--ochre-glow)', borderRadius: 'var(--r-s)', marginBottom: 12, fontSize: 13, color: 'var(--ochre-deep)', fontWeight: 600 }}>
-            {fromNote ? '📄 Generating from your note — topic and subject are pre-filled.' : '💬 Generating from your chat session.'}
+          <div className="context-banner">
+            <Icon name={fromNote ? 'file-text' : 'chat'} size={15} />
+            {fromNote ? 'Generating from your note — topic and subject are pre-filled.' : 'Generating from your chat session.'}
           </div>
         )}
 
@@ -147,31 +195,27 @@ export default function MCQ() {
             showTopic={false}
           />
         ) : (
-          <div style={{ marginBottom: 16 }}>
-            <button
-              className="btn btn-ghost btn-sm"
-              onClick={() => {
-                setSearchParams({})
-                setQuestions([])
-                setSelected({})
-                setRevealed({})
-                setCurrentGenId(null)
-              }}
-            >
+          <div className="back-row">
+            <button className="btn btn-ghost btn-sm" onClick={handleNewQuiz}>
               ← New Quiz
             </button>
           </div>
         )}
 
         {error && (
-          <div style={{ color: 'var(--vermillion)', marginBottom: 16, fontSize: 14 }}>
-            {error}
-          </div>
+          <div className="form-error">{error}</div>
+        )}
+
+        {loading && (
+          <LoadingState
+            title="Generating questions…"
+            sub="Claude is crafting curriculum-based questions — this takes 5–10 seconds."
+          />
         )}
 
         {!loading && questions.length === 0 && !error && (
           <EmptyState
-            icon="✦"
+            icon="quiz"
             title="Ready When You Are"
             description="Configure above and tap Generate to create practice questions from your textbook content."
           />
@@ -179,19 +223,20 @@ export default function MCQ() {
 
         {/* If exam is complete, show results first, then questions below */}
         {allAnswered && score && (
-          <>
-            <MCQResults questions={questions} selected={selected} score={score} />
-            {config.topic && (
-              <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'flex-end' }}>
-                <button
-                  className="btn btn-ghost btn-sm"
-                  onClick={() => navigate(`/notes?subject=${config.subject}&grade=${config.grade}&unit=${config.unit}&topic=${encodeURIComponent(config.topic)}`)}
-                >
-                  Generate Notes on "{config.topic}" →
-                </button>
-              </div>
-            )}
-          </>
+          <MCQResults
+            questions={questions}
+            selected={selected}
+            score={score}
+            xpEarned={xpEarned}
+            isRetake={isRetake}
+            genId={currentGenId}
+            onRetry={handleRetry}
+            onNewQuiz={handleNewQuiz}
+            notesTopic={config.topic || questions[0]?.topic || null}
+            onNotes={topic =>
+              navigate(`/notes?subject=${config.subject}&grade=${config.grade}&unit=${config.unit}&topic=${encodeURIComponent(topic)}`)
+            }
+          />
         )}
 
         {questions.map((q, qi) => {
@@ -208,17 +253,7 @@ export default function MCQ() {
               </div>
               <div className="mcq-body">
                 {q.passage && (
-                  <div style={{
-                    background: 'var(--sandstone)',
-                    borderRadius: 'var(--r-m)',
-                    padding: '12px 14px',
-                    marginBottom: 14,
-                    fontSize: 14,
-                    lineHeight: 1.7,
-                    color: 'var(--ink-2)',
-                  }}>
-                    {q.passage}
-                  </div>
+                  <div className="mcq-passage">{q.passage}</div>
                 )}
                 <div className="mcq-q">{qi + 1}. {q.question}</div>
                 <div className="mcq-opts">
@@ -281,21 +316,63 @@ export default function MCQ() {
   )
 }
 
-function MCQResults({ questions, selected, score }) {
+function useCountUp(target, duration = 800) {
+  const [value, setValue] = useState(0)
+  useEffect(() => {
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      setValue(target)
+      return
+    }
+    let raf
+    const start = performance.now()
+    function tick(now) {
+      const t = Math.min(1, (now - start) / duration)
+      const eased = 1 - Math.pow(1 - t, 3)
+      setValue(Math.round(eased * target))
+      if (t < 1) raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [target, duration])
+  return value
+}
+
+function MCQResults({ questions, selected, score, xpEarned, isRetake, genId, onRetry, onNewQuiz, notesTopic, onNotes }) {
   const pct = Math.round((score.correct / score.total) * 100)
   const band = pct >= 80 ? 'band-high' : pct >= 50 ? 'band-mid' : 'band-low'
   const label = pct >= 80 ? 'Excellent' : pct >= 50 ? 'Keep Practicing' : 'Needs Work'
+  const displayCorrect = useCountUp(score.correct)
+  const celebrate = pct >= 80 && !isRetake
 
   return (
-    <div className="mcq-results anim" style={{ marginBottom: 24 }}>
+    <div className="mcq-results anim res-wrap">
       <div className="results-header">
+        {celebrate && <Confetti />}
         <div className="results-title">Exam Complete</div>
         <div className="results-score">
-          <span className="score-num">{score.correct}</span>
+          <span className="score-num">{displayCorrect}</span>
           <span className="score-sep">/{score.total}</span>
           <span className="score-pct">{pct}%</span>
         </div>
         <div className={`score-band ${band}`}>{label}</div>
+        <div className="res-msg">{resultMessage(pct, genId ?? '')}</div>
+        {isRetake ? (
+          <div className="res-xp">Practice round — XP already earned</div>
+        ) : xpEarned > 0 ? (
+          <div className="res-xp"><Icon name="star" size={14} /> +{xpEarned} XP earned</div>
+        ) : null}
+      </div>
+
+      <div className="res-actions">
+        <button className="btn btn-ochre" onClick={onRetry}>
+          <Icon name="retry" size={15} /> Retry Quiz
+        </button>
+        <button className="btn btn-ghost" onClick={onNewQuiz}>New Quiz</button>
+        {notesTopic && (
+          <button className="btn btn-indigo" onClick={() => onNotes(notesTopic)}>
+            Generate Notes
+          </button>
+        )}
       </div>
 
       <table className="results-table">

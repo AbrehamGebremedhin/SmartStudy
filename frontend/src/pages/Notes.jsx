@@ -2,9 +2,11 @@ import { useState, useEffect, useRef } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import ConfigPanel from '../components/ui/ConfigPanel'
 import EmptyState from '../components/ui/EmptyState'
+import LoadingState from '../components/ui/LoadingState'
 import { generateNotes, chatWithNote } from '../services/notes.service'
 import { evaluateAnswer } from '../services/evaluation.service'
 import { saveGeneration, loadGeneration } from '../lib/genStorage'
+import { awardXP, recordLastGen } from '../lib/gamification'
 
 const DEFAULT_CONFIG = {
   subject: 'biology',
@@ -81,6 +83,8 @@ export default function Notes() {
       setChatHistory([])
       saveGeneration(res.generation_id, { type: 'notes', notes: n, config })
       setSearchParams({ gen: res.generation_id })
+      awardXP('gen_notes', { subject: config.subject })
+      recordLastGen({ type: 'notes', genId: res.generation_id, subject: config.subject, grade: config.grade, unit: config.unit, topic: config.topic })
     } catch (e) {
       setError(e.message)
     } finally {
@@ -99,6 +103,7 @@ export default function Notes() {
     try {
       const res = await chatWithNote(currentGenId, q, chatHistory)
       setChatHistory([...newHistory, { role: 'assistant', content: res.answer, key_concepts: res.key_concepts, follow_up_questions: res.follow_up_questions }])
+      awardXP('chat_question', { subject: config.subject })
     } catch (e) {
       setChatError(e.message)
     } finally {
@@ -141,9 +146,16 @@ export default function Notes() {
           </div>
         )}
 
+        {loading && (
+          <LoadingState
+            title="Generating notes…"
+            sub="Claude is writing comprehensive study notes — this usually takes 8–15 seconds."
+          />
+        )}
+
         {!loading && !notes && !error && (
           <EmptyState
-            icon="≡"
+            icon="notes"
             title="Generate Study Notes"
             description="Enter a topic for detailed notes with key concepts, examples, and review questions."
           />
@@ -154,8 +166,8 @@ export default function Notes() {
         {notes && currentGenId && (
           <>
             {/* ── What's Next? ── */}
-            <div style={{ marginTop: 32, padding: '20px 24px', background: 'var(--sandstone)', borderRadius: 'var(--r-xl)', display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
-              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink-3)', marginRight: 4 }}>Study with:</span>
+            <div className="n-whats-next">
+              <span className="n-whats-next-label">Study with:</span>
               <button
                 className="btn btn-ochre btn-sm"
                 onClick={() => navigate(`/mcq?from_note=${currentGenId}&subject=${config.subject}&grade=${config.grade}&unit=${config.unit}&topic=${encodeURIComponent(notes.title || config.topic)}`)}
@@ -163,8 +175,7 @@ export default function Notes() {
                 Practice MCQs
               </button>
               <button
-                className="btn btn-sm"
-                style={{ background: 'var(--indigo)', color: '#fff' }}
+                className="btn btn-indigo btn-sm"
                 onClick={() => navigate(`/flashcards?from_note=${currentGenId}&subject=${config.subject}&grade=${config.grade}&unit=${config.unit}&topic=${encodeURIComponent(notes.title || config.topic)}`)}
               >
                 Create Flashcards
@@ -172,36 +183,24 @@ export default function Notes() {
             </div>
 
             {/* ── Note Chat ── */}
-            <div style={{ marginTop: 24 }}>
+            <div className="n-chat-wrap">
               <h3 className="n-sec-t" style={{ marginBottom: 16 }}>Ask About This Note</h3>
-              <div style={{ background: 'var(--parchment)', border: '1.5px solid var(--border)', borderRadius: 'var(--r-xl)', overflow: 'hidden' }}>
-
-                {/* Message thread */}
+              <div className="n-chat-box">
                 {chatHistory.length > 0 && (
-                  <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 420, overflowY: 'auto' }}>
+                  <div className="n-chat-thread">
                     {chatHistory.map((msg, i) => (
                       <div key={i}>
-                        <div style={{
-                          alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
-                          display: 'inline-block',
-                          maxWidth: '85%',
-                          background: msg.role === 'user' ? 'var(--ink)' : 'var(--sandstone)',
-                          color: msg.role === 'user' ? 'var(--parchment)' : 'var(--ink)',
-                          borderRadius: msg.role === 'user' ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
-                          padding: '10px 14px',
-                          fontSize: 14,
-                          lineHeight: 1.6,
-                        }}>
+                        <div className={msg.role === 'user' ? 'n-chat-msg-user' : 'n-chat-msg-asst'}>
                           {msg.content}
                         </div>
                         {msg.role === 'assistant' && msg.follow_up_questions?.length > 0 && (
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                          <div className="n-chat-follow-ups">
                             {msg.follow_up_questions.map((q, j) => (
                               <button
                                 key={j}
+                                className="n-chat-follow-btn"
                                 onClick={() => handleChatSend(q)}
                                 disabled={chatLoading}
-                                style={{ background: 'var(--ochre-glow)', border: 'none', borderRadius: 20, padding: '4px 12px', fontSize: 12, cursor: 'pointer', color: 'var(--ochre-deep)', fontWeight: 600 }}
                               >
                                 {q}
                               </button>
@@ -211,7 +210,7 @@ export default function Notes() {
                       </div>
                     ))}
                     {chatLoading && (
-                      <div style={{ fontSize: 13, color: 'var(--ink-3)', fontStyle: 'italic' }}>Thinking…</div>
+                      <span className="typing" aria-label="Thinking"><i /><i /><i /></span>
                     )}
                     {chatError && (
                       <div style={{ fontSize: 13, color: 'var(--vermillion)' }}>{chatError}</div>
@@ -219,19 +218,15 @@ export default function Notes() {
                     <div ref={chatBottomRef} />
                   </div>
                 )}
-
-                {/* Input row */}
-                <div style={{ display: 'flex', gap: 8, padding: '12px 16px', borderTop: chatHistory.length > 0 ? '1px solid var(--border)' : 'none', background: 'var(--parchment)' }}>
+                <div className={`n-chat-input-row${chatHistory.length > 0 ? ' with-thread' : ''}`}>
                   <input
                     type="text"
+                    className="n-chat-input"
                     value={chatInput}
                     onChange={e => setChatInput(e.target.value)}
                     onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChatSend() } }}
                     placeholder="Ask anything about this note…"
                     disabled={chatLoading}
-                    style={{ flex: 1, padding: '9px 14px', borderRadius: 'var(--r-s)', border: '1.5px solid var(--border)', background: 'var(--parchment)', color: 'var(--ink)', fontSize: 14, outline: 'none', fontFamily: 'var(--f-body)' }}
-                    onFocus={e => { e.target.style.borderColor = 'var(--ochre)' }}
-                    onBlur={e => { e.target.style.borderColor = 'var(--border)' }}
                   />
                   <button
                     className="btn btn-ochre btn-sm"
@@ -302,61 +297,21 @@ function NotesContent({ notes, subject }) {
       {/* ── Cover: title + overview ── */}
       {(notes.title || overview) && (
         <div className="n-sec">
-          {/* Dark cover card */}
-          <div style={{
-            background: 'var(--ink)',
-            borderRadius: 'var(--r-xl)',
-            padding: '32px 28px',
-            marginBottom: 16,
-            position: 'relative',
-            overflow: 'hidden',
-          }}>
-            <div style={{
-              position: 'absolute', inset: 0,
-              background: 'radial-gradient(ellipse at 80% 20%, rgba(196,132,29,0.15) 0%, transparent 60%)',
-              pointerEvents: 'none',
-            }} />
-            {notes.title && (
-              <div style={{
-                fontFamily: 'var(--f-display)',
-                fontSize: 26,
-                fontWeight: 700,
-                color: 'var(--ochre-glow)',
-                marginBottom: 10,
-                position: 'relative',
-              }}>
-                {notes.title}
-              </div>
-            )}
+          <div className="n-cover">
+            <div className="n-cover-glow" />
+            {notes.title && <div className="n-cover-title">{notes.title}</div>}
             {overview?.brief_summary && (
-              <p style={{
-                fontSize: 15,
-                lineHeight: 1.8,
-                color: 'rgba(246,240,228,0.55)',
-                maxWidth: 640,
-                position: 'relative',
-              }}>
-                {overview.brief_summary}
-              </p>
+              <p className="n-cover-summary">{overview.brief_summary}</p>
             )}
             {overview?.prerequisites?.length > 0 && (
-              <div style={{ marginTop: 16, position: 'relative' }}>
-                <div style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.12em', color: 'rgba(196,132,29,0.5)', marginBottom: 8 }}>
-                  Prerequisites
-                </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              <>
+                <div className="n-prereq-label">Prerequisites</div>
+                <div className="n-prereq-chips">
                   {overview.prerequisites.map((p, i) => (
-                    <span key={i} style={{
-                      background: 'rgba(196,132,29,0.12)',
-                      border: '1px solid rgba(196,132,29,0.2)',
-                      borderRadius: 20,
-                      padding: '3px 12px',
-                      fontSize: 12,
-                      color: 'var(--ochre-glow)',
-                    }}>{p}</span>
+                    <span key={i} className="n-prereq-chip">{p}</span>
                   ))}
                 </div>
-              </div>
+              </>
             )}
           </div>
 
@@ -432,16 +387,10 @@ function NotesContent({ notes, subject }) {
                 <div style={{ marginBottom: 14 }}>
                   <Label color="var(--ochre-deep)">Examples</Label>
                   {kc.examples.map((ex, j) => (
-                    <div key={j} style={{
-                      background: 'var(--sandstone)',
-                      borderRadius: 'var(--r-s)',
-                      padding: '12px 16px',
-                      marginBottom: 8,
-                      borderLeft: '3px solid var(--ochre)',
-                    }}>
-                      {ex.scenario && <div className="n-text" style={{ fontWeight: 600, marginBottom: 4 }}>{ex.scenario}</div>}
+                    <div key={j} className="n-example">
+                      {ex.scenario && <div className="n-text n-example-title">{ex.scenario}</div>}
                       {ex.demonstration && <div className="n-text">{ex.demonstration}</div>}
-                      {ex.analysis && <div className="n-text" style={{ marginTop: 6, color: 'var(--ink-3)', fontStyle: 'italic' }}>{ex.analysis}</div>}
+                      {ex.analysis && <div className="n-text n-example-analysis">{ex.analysis}</div>}
                     </div>
                   ))}
                 </div>
@@ -451,9 +400,9 @@ function NotesContent({ notes, subject }) {
                 <div>
                   <Label color="var(--vermillion)">Common Misconceptions</Label>
                   {kc.common_misconceptions.map((m, j) => (
-                    <div key={j} className="n-misc" style={{ background: 'var(--vermillion-l)', marginBottom: 6 }}>
-                      <div className="n-text" style={{ color: 'var(--vermillion)', fontWeight: 600 }}>✗ {m.misconception}</div>
-                      <div className="n-text" style={{ color: 'var(--highland)', marginTop: 5, paddingTop: 5, borderTop: '1px solid rgba(0,0,0,0.06)' }}>✓ {m.correction}</div>
+                    <div key={j} className="n-misc-wrong">
+                      <div className="n-text n-misc-wrong-text">✗ {m.misconception}</div>
+                      <div className="n-text n-misc-right-text">✓ {m.correction}</div>
                     </div>
                   ))}
                 </div>
@@ -556,13 +505,7 @@ function NotesContent({ notes, subject }) {
                 </div>
               )}
               {ex.solution && (
-                <div style={{
-                  background: 'var(--highland-l)',
-                  borderRadius: 'var(--r-s)',
-                  padding: '12px 16px',
-                  borderLeft: '3px solid var(--highland)',
-                  marginBottom: 10,
-                }}>
+                <div className="n-solution">
                   <Label color="var(--highland)">Solution</Label>
                   <div className="n-text">{ex.solution}</div>
                 </div>
@@ -701,6 +644,7 @@ function ReviewQuestion({ index, question, subject, note }) {
         note: note ?? null,
       })
       setResult(res)
+      awardXP('eval_submitted', { score: res.score, subject })
     } catch (e) {
       setEvalError(e.message)
     } finally {
@@ -765,68 +709,47 @@ function ReviewQuestion({ index, question, subject, note }) {
       {/* Evaluation result */}
       {result && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {/* Score hero */}
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 12,
-            background: scoreBg,
-            borderRadius: 'var(--r-s)',
-            padding: '12px 16px',
-            borderLeft: `3px solid ${scoreColor}`,
-          }}>
-            <div style={{
-              fontFamily: 'var(--f-mono)',
-              fontSize: 26,
-              fontWeight: 800,
-              color: scoreColor,
-              lineHeight: 1,
-            }}>
-              {scorePct}%
-            </div>
+          {/* Score hero — dynamic colors stay inline, layout moves to CSS */}
+          <div className="eval-score" style={{ background: scoreBg, borderLeft: `3px solid ${scoreColor}` }}>
+            <div className="eval-score-pct" style={{ color: scoreColor }}>{scorePct}%</div>
             <div>
-              <div style={{ fontWeight: 700, fontSize: 14, color: scoreColor }}>
+              <div className="eval-score-label" style={{ color: scoreColor }}>
                 {result.is_correct ? 'Correct' : scorePct >= 50 ? 'Partially Correct' : 'Needs Improvement'}
               </div>
               <div className="n-text" style={{ marginTop: 2 }}>{result.feedback}</div>
             </div>
           </div>
 
-          {/* Strengths */}
           {result.strengths?.length > 0 && result.strengths[0] !== 'Evaluation failed' && (
-            <div style={{ background: 'var(--highland-l)', borderRadius: 'var(--r-s)', padding: '10px 14px', borderLeft: '3px solid var(--highland)' }}>
+            <div className="eval-block eval-block-strength">
               <Label color="var(--highland)">Strengths</Label>
               <BulletList items={result.strengths} />
             </div>
           )}
 
-          {/* Key points missed */}
           {result.key_points_missed?.length > 0 && result.key_points_missed[0] !== 'Evaluation failed' && (
-            <div style={{ background: 'var(--ochre-glow)', borderRadius: 'var(--r-s)', padding: '10px 14px', borderLeft: '3px solid var(--ochre)' }}>
+            <div className="eval-block eval-block-missed">
               <Label color="var(--ochre-deep)">Key Points Missed</Label>
               <BulletList items={result.key_points_missed} />
             </div>
           )}
 
-          {/* Misconceptions */}
           {result.misconceptions?.length > 0 && result.misconceptions[0] !== 'Evaluation failed' && (
-            <div style={{ background: 'var(--vermillion-l)', borderRadius: 'var(--r-s)', padding: '10px 14px', borderLeft: '3px solid var(--vermillion)' }}>
+            <div className="eval-block eval-block-misc">
               <Label color="var(--vermillion)">Misconceptions</Label>
               <BulletList items={result.misconceptions} />
             </div>
           )}
 
-          {/* Improvement suggestions */}
           {result.improvement_suggestions?.length > 0 && (
-            <div style={{ background: 'var(--sandstone)', borderRadius: 'var(--r-s)', padding: '10px 14px' }}>
+            <div className="eval-block eval-block-suggest">
               <Label>Improvement Suggestions</Label>
               <BulletList items={result.improvement_suggestions} />
             </div>
           )}
 
-          {/* Model answer */}
           {result.correct_solution?.length > 0 && (
-            <div style={{ background: 'var(--sandstone)', borderRadius: 'var(--r-s)', padding: '10px 14px', borderLeft: '3px solid var(--indigo)' }}>
+            <div className="eval-block eval-block-model">
               <Label color="var(--indigo)">Model Answer</Label>
               <BulletList items={result.correct_solution} />
             </div>

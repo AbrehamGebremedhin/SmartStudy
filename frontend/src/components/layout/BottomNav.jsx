@@ -1,11 +1,12 @@
 import { NavLink } from 'react-router-dom'
+import Icon from '../ui/Icon'
 
 const TABS = [
-  { to: '/', icon: '◆', label: 'Home', end: true },
-  { to: '/mcq', icon: '✦', label: 'Quiz' },
-  { to: '/flashcards', icon: '▣', label: 'Cards' },
-  { to: '/chat', icon: '◉', label: 'Tutor' },
-  { to: '/history', icon: '↻', label: 'History' },
+  { to: '/', icon: 'home', label: 'Home', end: true },
+  { to: '/mcq', icon: 'quiz', label: 'Quiz' },
+  { to: '/flashcards', icon: 'cards', label: 'Cards' },
+  { to: '/chat', icon: 'tutor', label: 'Tutor' },
+  { to: '/history', icon: 'history', label: 'Progress' },
 ]
 
 export default function BottomNav() {
@@ -18,7 +19,7 @@ export default function BottomNav() {
           end={end}
           className={({ isActive }) => `bn-btn${isActive ? ' on' : ''}`}
         >
-          <span className="bn-i">{icon}</span>
+          <span className="bn-i"><Icon name={icon} size={21} /></span>
           {label}
         </NavLink>
       ))}

@@ -1,14 +1,41 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import SubjectChips from '../components/ui/SubjectChips'
-import { GRADES, getDaysUntilEUEE } from '../lib/curriculum'
+import Icon from '../components/ui/Icon'
+import { GRADES, getDaysUntilEUEE, subjectLabel, typeIcon } from '../lib/curriculum'
+import { getLevelInfo, getStreak, getStats, getLastActivity } from '../lib/gamification'
+import { getHistory } from '../services/history.service'
+import { loadGeneration, routeForType } from '../lib/genStorage'
+
+function relTime(iso) {
+  if (!iso) return ''
+  const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  return `${Math.floor(hrs / 24)}d ago`
+}
 
 export default function Home() {
   const { user } = useAuth()
   const navigate = useNavigate()
   const [mode, setMode] = useState('euee')
   const [grade, setGrade] = useState(10)
+  const [sessions, setSessions] = useState(null)
+
+  // localStorage reads are idempotent — safe as lazy initializers under StrictMode
+  const [level] = useState(() => getLevelInfo())
+  const [streak] = useState(() => getStreak())
+  const [stats] = useState(() => getStats())
+  const [lastGen] = useState(() => getLastActivity())
+
+  useEffect(() => {
+    getHistory(100)
+      .then(items => setSessions(items.length))
+      .catch(() => {})
+  }, [])
 
   const days = getDaysUntilEUEE()
   const isEUEE = mode === 'euee'
@@ -24,6 +51,30 @@ export default function Home() {
             ? 'Every question brings you closer to passing EUEE.'
             : `Grade ${grade} study companion — build strong foundations.`}
         </div>
+
+        <div className="g-row">
+          <div className="g-level">
+            <span className="g-level-geez">{level.geez}</span>
+            <span className="g-level-name">{level.name} · {level.translation}</span>
+          </div>
+          <div className="g-xp">
+            <div className="g-xpbar">
+              <div className="g-xpbar-fill" style={{ '--w': `${level.pct}%` }} />
+            </div>
+            <div className="g-xpnum">
+              {level.isMax ? `${level.xp} XP · highest rank` : `${level.xp} / ${level.next.threshold} XP to ${level.next.name}`}
+            </div>
+          </div>
+          <div
+            className={`g-streak${streak.activeToday ? '' : ' cold'}`}
+            title={streak.activeToday ? `Best streak: ${streak.best} days` : 'Study today to keep your streak alive'}
+          >
+            <Icon name="flame" size={16} className={streak.activeToday ? 'g-flame' : undefined} />
+            <span>{streak.current}</span>
+            <span className="g-streak-l">day{streak.current === 1 ? '' : 's'}</span>
+          </div>
+        </div>
+
         {isEUEE && (
           <div className="euee-block">
             <span className="euee-num pulse">{days}</span>
@@ -32,39 +83,41 @@ export default function Home() {
         )}
         <div className="stats-row">
           <div className="stat-box">
-            <div className="stat-v">—</div>
+            <div className="stat-v">{stats.questionsAnswered > 0 ? stats.questionsAnswered : '—'}</div>
             <div className="stat-l">Questions</div>
           </div>
           <div className="stat-box">
-            <div className="stat-v">—</div>
+            <div className="stat-v">{stats.accuracyPct != null ? `${stats.accuracyPct}%` : '—'}</div>
             <div className="stat-l">Accuracy</div>
           </div>
           <div className="stat-box">
-            <div className="stat-v">—</div>
+            <div className="stat-v">{sessions ?? '—'}</div>
             <div className="stat-l">Sessions</div>
           </div>
         </div>
       </div>
+
+      <ContinueCard lastGen={lastGen} navigate={navigate} />
 
       <div className="mode-bar anim">
         <button
           className={`mode-btn${isEUEE ? ' on' : ''}`}
           onClick={() => setMode('euee')}
         >
-          🎯 EUEE Prep
+          <span className="m-top"><Icon name="target" size={15} /> EUEE Prep</span>
           <span className="m-sub">Grade 12</span>
         </button>
         <button
           className={`mode-btn${!isEUEE ? ' on' : ''}`}
           onClick={() => setMode('school')}
         >
-          📚 School Help
+          <span className="m-top"><Icon name="school" size={15} /> School Help</span>
           <span className="m-sub">Grade {grade}</span>
         </button>
       </div>
 
       {!isEUEE && (
-        <div style={{ marginBottom: 18, display: 'flex', gap: 6 }}>
+        <div className="grade-row">
           {GRADES.map(g => (
             <button
               key={g}
@@ -79,22 +132,22 @@ export default function Home() {
 
       <div className="act-grid anim">
         <div className="act-card" onClick={() => navigate('/mcq')}>
-          <div className="act-i" style={{ background: 'var(--ochre-glow)' }}>📝</div>
+          <div className="act-i act-i-ochre"><Icon name="quiz" /></div>
           <h3>{isEUEE ? 'Practice Exam' : 'Quick Quiz'}</h3>
           <p>{isEUEE ? 'EUEE-style MCQs with solutions' : 'Test any unit'}</p>
         </div>
         <div className="act-card" onClick={() => navigate('/flashcards')}>
-          <div className="act-i" style={{ background: 'var(--highland-l)' }}>🃏</div>
+          <div className="act-i act-i-highland"><Icon name="cards" /></div>
           <h3>Flashcards</h3>
           <p>Rapid review of key concepts</p>
         </div>
         <div className="act-card" onClick={() => navigate('/notes')}>
-          <div className="act-i" style={{ background: 'var(--indigo-l)' }}>📓</div>
+          <div className="act-i act-i-indigo"><Icon name="notes" /></div>
           <h3>Study Notes</h3>
           <p>Full notes with worked examples</p>
         </div>
         <div className="act-card" onClick={() => navigate('/chat')}>
-          <div className="act-i" style={{ background: 'var(--vermillion-l)' }}>💬</div>
+          <div className="act-i act-i-vermillion"><Icon name="tutor" /></div>
           <h3>Ask Tutor</h3>
           <p>AI help with difficult topics</p>
         </div>
@@ -106,5 +159,43 @@ export default function Home() {
         onSelect={() => navigate('/mcq')}
       />
     </div>
+  )
+}
+
+function ContinueCard({ lastGen, navigate }) {
+  if (!lastGen?.genId) return null
+  const saved = loadGeneration(lastGen.genId)
+  if (!saved) return null
+
+  const typeLabel = lastGen.type === 'mcq' ? 'Quiz' : lastGen.type === 'flashcard' ? 'Flashcards' : 'Notes'
+  const title = lastGen.topic ||
+    [subjectLabel(lastGen.subject), lastGen.grade ? `Grade ${lastGen.grade}` : null, lastGen.unit ? `Unit ${lastGen.unit}` : null]
+      .filter(Boolean)
+      .join(' · ')
+
+  let progress = null
+  if (lastGen.type === 'mcq' && saved.questions?.length) {
+    const answered = Object.keys(saved.revealed ?? {}).length
+    progress = saved.completedAt ? 'Completed · review or retry' : `${answered}/${saved.questions.length} answered`
+  } else if (lastGen.type === 'flashcard' && saved.cards?.length) {
+    const rated = Object.keys(saved.ratings ?? {}).length
+    progress = saved.completedAt ? 'Deck completed' : `${rated}/${saved.cards.length} cards rated`
+  }
+
+  return (
+    <button
+      className="cont-card anim"
+      onClick={() => navigate(`${routeForType(lastGen.type)}?gen=${lastGen.genId}`)}
+    >
+      <div className="cont-ico"><Icon name={typeIcon(lastGen.type)} /></div>
+      <div className="cont-info">
+        <div className="cont-kicker">Continue studying</div>
+        <div className="cont-title">{title}</div>
+        <div className="cont-meta">
+          {typeLabel}{progress ? ` · ${progress}` : ''} · {relTime(lastGen.at)}
+        </div>
+      </div>
+      <Icon name="arrow-right" size={18} className="cont-arrow" />
+    </button>
   )
 }

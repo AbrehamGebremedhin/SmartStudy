@@ -1,17 +1,21 @@
+import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
+import Icon from '../ui/Icon'
+import { getLevelInfo } from '../../lib/gamification'
 
 const NAV_ITEMS = [
-  { to: '/', label: 'Home', icon: '◆', end: true },
-  { to: '/mcq', label: 'MCQ Quiz', icon: '✦' },
-  { to: '/flashcards', label: 'Flashcards', icon: '▣' },
-  { to: '/notes', label: 'Study Notes', icon: '≡' },
-  { to: '/chat', label: 'AI Tutor', icon: '◉' },
+  { to: '/', label: 'Home', icon: 'home', end: true },
+  { to: '/mcq', label: 'MCQ Quiz', icon: 'quiz' },
+  { to: '/flashcards', label: 'Flashcards', icon: 'cards' },
+  { to: '/notes', label: 'Study Notes', icon: 'notes' },
+  { to: '/chat', label: 'AI Tutor', icon: 'tutor' },
 ]
 
 export default function Sidebar() {
   const { user } = useAuth()
   const initial = user?.name?.[0]?.toUpperCase() ?? 'S'
+  const [level] = useState(() => getLevelInfo())
 
   return (
     <div className="d-side">
@@ -29,7 +33,7 @@ export default function Sidebar() {
             end={end}
             className={({ isActive }) => `ds-btn${isActive ? ' on' : ''}`}
           >
-            <span className="ds-ico">{icon}</span>
+            <span className="ds-ico"><Icon name={icon} size={17} /></span>
             {label}
           </NavLink>
         ))}
@@ -39,8 +43,8 @@ export default function Sidebar() {
           to="/history"
           className={({ isActive }) => `ds-btn${isActive ? ' on' : ''}`}
         >
-          <span className="ds-ico">↻</span>
-          History
+          <span className="ds-ico"><Icon name="history" size={17} /></span>
+          Progress
         </NavLink>
       </div>
 
@@ -49,13 +53,9 @@ export default function Sidebar() {
           <div className="ds-av">
             {user?.picture ? <img src={user.picture} alt={user.name} /> : initial}
           </div>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 500, color: 'rgba(246,240,228,0.8)' }}>
-              {user?.name ?? 'Student'}
-            </div>
-            <div style={{ fontSize: 11, color: 'rgba(246,240,228,0.3)' }}>
-              {user?.email ?? ''}
-            </div>
+          <div className="ds-user-info">
+            <div className="ds-user-name">{user?.name ?? 'Student'}</div>
+            <div className="ds-user-level">{level.geez} · {level.translation}</div>
           </div>
         </div>
       </div>

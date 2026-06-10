@@ -3,6 +3,7 @@ import { AuthProvider, useAuth } from './context/AuthContext'
 import Sidebar from './components/layout/Sidebar'
 import MobileHeader from './components/layout/MobileHeader'
 import BottomNav from './components/layout/BottomNav'
+import GamifyLayer from './components/ui/GamifyLayer'
 import Login from './pages/Login'
 import Home from './pages/Home'
 import MCQ from './pages/MCQ'
@@ -28,6 +29,7 @@ function AppShell() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>
+      <GamifyLayer />
       <BottomNav />
     </div>
   )
