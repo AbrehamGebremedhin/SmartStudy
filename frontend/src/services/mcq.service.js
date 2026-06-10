@@ -5,6 +5,6 @@ import { api } from './apiClient'
  * @param {{ subject: string, grade: number|null, unit: string|null, num_questions: number, difficulty: string }} params
  * @returns {Promise<MCQResponse>}
  */
-export function generateMCQ({ subject, grade, unit, num_questions, difficulty }) {
-  return api.post('/mcq/generate', { subject, grade, unit, num_questions, difficulty })
+export function generateMCQ({ subject, grade, unit, topic, num_questions, difficulty, note_id, chat_session_id }) {
+  return api.post('/mcq/generate', { subject, grade, unit, topic, num_questions, difficulty, note_id, chat_session_id })
 }

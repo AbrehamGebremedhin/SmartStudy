@@ -76,6 +76,14 @@ FIXTURE_EVAL_RESPONSE = {
     "token_usage": "Input: 400 | Output: 800 | $0.0003",
 }
 
+FIXTURE_NOTE_CHAT_RESPONSE = {
+    "answer": "ATP is produced during the light reactions of photosynthesis via photophosphorylation.",
+    "key_concepts": ["ATP", "photophosphorylation", "light reactions"],
+    "follow_up_questions": ["What is the role of NADPH?", "How does the Calvin cycle use ATP?"],
+    "error": None,
+    "token_usage": "Input: 300 | Output: 500 | $0.0002",
+}
+
 FIXTURE_EVAL_RESPONSE_WRONG = {
     "is_correct": False,
     "score": 0.2,

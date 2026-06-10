@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams, useNavigate } from 'react-router-dom'
 import ConfigPanel from '../components/ui/ConfigPanel'
 import EmptyState from '../components/ui/EmptyState'
 import { generateFlashcards } from '../services/flashcards.service'
@@ -11,13 +11,23 @@ const DEFAULT_CONFIG = {
   unit: '1',
   difficulty: 'medium',
   numItems: 10,
+  topic: null,
 }
 
 export default function Flashcards() {
   const [searchParams, setSearchParams] = useSearchParams()
+  const navigate = useNavigate()
   const genId = searchParams.get('gen')
 
-  const [config, setConfig] = useState(DEFAULT_CONFIG)
+  const fromNote = searchParams.get('from_note')
+  const fromChat = searchParams.get('from_chat')
+
+  const [config, setConfig] = useState(() => ({
+    ...DEFAULT_CONFIG,
+    subject: searchParams.get('subject') || DEFAULT_CONFIG.subject,
+    grade: searchParams.get('grade') ? Number(searchParams.get('grade')) : DEFAULT_CONFIG.grade,
+    topic: searchParams.get('topic') || DEFAULT_CONFIG.topic,
+  }))
   const [cards, setCards] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -51,8 +61,11 @@ export default function Flashcards() {
         subject: config.subject,
         grade: config.grade,
         unit: config.unit,
+        topic: config.topic || null,
         num_cards: config.numItems,
         difficulty: config.difficulty,
+        note_id: fromNote || null,
+        chat_session_id: fromChat || null,
       })
       const c = res.flashcards ?? []
       setCards(c)
@@ -84,6 +97,12 @@ export default function Flashcards() {
         <p>Tap to flip — reveal the answer</p>
       </div>
       <div className="pg-body">
+        {(fromNote || fromChat) && !genId && (
+          <div style={{ padding: '10px 14px', background: 'var(--ochre-glow)', borderRadius: 'var(--r-s)', marginBottom: 12, fontSize: 13, color: 'var(--ochre-deep)', fontWeight: 600 }}>
+            {fromNote ? '📄 Generating from your note — topic and subject are pre-filled.' : '💬 Generating from your chat session.'}
+          </div>
+        )}
+
         {genId && cards.length > 0 ? (
           <div style={{ marginBottom: 16 }}>
             <button className="btn btn-ghost btn-sm" onClick={() => {
@@ -103,6 +122,7 @@ export default function Flashcards() {
             loading={loading}
             numItemsLabel="Cards"
             generateLabel="Generate Flashcards"
+            showTopic={!fromNote && !fromChat}
           />
         )}
 
@@ -118,6 +138,17 @@ export default function Flashcards() {
             title="Create Flashcards"
             description="Pick a subject, then generate cards to flip through and test yourself."
           />
+        )}
+
+        {cards.length > 0 && config.topic && (
+          <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => navigate(`/notes?subject=${config.subject}&grade=${config.grade}&topic=${encodeURIComponent(config.topic)}`)}
+            >
+              Generate Notes on "{config.topic}" →
+            </button>
+          </div>
         )}
 
         {card && (

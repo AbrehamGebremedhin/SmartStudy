@@ -76,6 +76,13 @@ class HistoryItemResponse(BaseModel):
     accessed_at: datetime
 
 
+class NoteChatResponse(BaseModel):
+    answer: str
+    key_concepts: list[str]
+    follow_up_questions: list[str]
+    token_usage: str | None = None
+
+
 class EvaluateAnswerResponse(BaseModel):
     is_correct: bool
     score: float

@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useState, useEffect, useRef } from 'react'
+import { useSearchParams, useNavigate } from 'react-router-dom'
 import ConfigPanel from '../components/ui/ConfigPanel'
 import EmptyState from '../components/ui/EmptyState'
-import { generateNotes } from '../services/notes.service'
+import { generateNotes, chatWithNote } from '../services/notes.service'
 import { evaluateAnswer } from '../services/evaluation.service'
 import { saveGeneration, loadGeneration } from '../lib/genStorage'
 
@@ -16,21 +16,44 @@ const DEFAULT_CONFIG = {
 
 export default function Notes() {
   const [searchParams, setSearchParams] = useSearchParams()
+  const navigate = useNavigate()
   const genId = searchParams.get('gen')
 
-  const [config, setConfig] = useState(DEFAULT_CONFIG)
+  // Pre-fill params (used when navigating here from MCQ/Flashcard/Chat)
+  const fromChat = searchParams.get('from_chat')
+
+  const [config, setConfig] = useState(() => ({
+    ...DEFAULT_CONFIG,
+    subject: searchParams.get('subject') || DEFAULT_CONFIG.subject,
+    grade: searchParams.get('grade') ? Number(searchParams.get('grade')) : DEFAULT_CONFIG.grade,
+    unit: searchParams.get('unit') || DEFAULT_CONFIG.unit,
+    topic: searchParams.get('topic') || DEFAULT_CONFIG.topic,
+  }))
   const [notes, setNotes] = useState(null)
+  const [currentGenId, setCurrentGenId] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+
+  // Note chat state
+  const [chatHistory, setChatHistory] = useState([])
+  const [chatInput, setChatInput] = useState('')
+  const [chatLoading, setChatLoading] = useState(false)
+  const [chatError, setChatError] = useState(null)
+  const chatBottomRef = useRef(null)
 
   useEffect(() => {
     if (!genId) return
     const saved = loadGeneration(genId)
     if (saved) {
       setNotes(saved.notes ?? null)
+      setCurrentGenId(genId)
       if (saved.config) setConfig(saved.config)
     }
   }, [genId])
+
+  useEffect(() => {
+    chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [chatHistory])
 
   function handleChange(key, value) {
     setConfig(prev => ({ ...prev, [key]: value }))
@@ -50,15 +73,36 @@ export default function Notes() {
         topic: config.topic,
         grade: config.grade,
         unit: config.unit,
+        chat_session_id: fromChat || null,
       })
       const n = res.notes ?? null
       setNotes(n)
+      setCurrentGenId(res.generation_id)
+      setChatHistory([])
       saveGeneration(res.generation_id, { type: 'notes', notes: n, config })
       setSearchParams({ gen: res.generation_id })
     } catch (e) {
       setError(e.message)
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function handleChatSend(question) {
+    const q = (question ?? chatInput).trim()
+    if (!q || !currentGenId) return
+    const newHistory = [...chatHistory, { role: 'user', content: q }]
+    setChatHistory(newHistory)
+    setChatInput('')
+    setChatLoading(true)
+    setChatError(null)
+    try {
+      const res = await chatWithNote(currentGenId, q, chatHistory)
+      setChatHistory([...newHistory, { role: 'assistant', content: res.answer, key_concepts: res.key_concepts, follow_up_questions: res.follow_up_questions }])
+    } catch (e) {
+      setChatError(e.message)
+    } finally {
+      setChatLoading(false)
     }
   }
 
@@ -106,6 +150,101 @@ export default function Notes() {
         )}
 
         {notes && <NotesContent notes={notes} subject={config.subject} />}
+
+        {notes && currentGenId && (
+          <>
+            {/* ── What's Next? ── */}
+            <div style={{ marginTop: 32, padding: '20px 24px', background: 'var(--sandstone)', borderRadius: 'var(--r-xl)', display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink-3)', marginRight: 4 }}>Study with:</span>
+              <button
+                className="btn btn-ochre btn-sm"
+                onClick={() => navigate(`/mcq?from_note=${currentGenId}&subject=${config.subject}&grade=${config.grade}&topic=${encodeURIComponent(notes.title || config.topic)}`)}
+              >
+                Practice MCQs
+              </button>
+              <button
+                className="btn btn-sm"
+                style={{ background: 'var(--indigo)', color: '#fff' }}
+                onClick={() => navigate(`/flashcards?from_note=${currentGenId}&subject=${config.subject}&grade=${config.grade}&topic=${encodeURIComponent(notes.title || config.topic)}`)}
+              >
+                Create Flashcards
+              </button>
+            </div>
+
+            {/* ── Note Chat ── */}
+            <div style={{ marginTop: 24 }}>
+              <h3 className="n-sec-t" style={{ marginBottom: 16 }}>Ask About This Note</h3>
+              <div style={{ background: 'var(--parchment)', border: '1.5px solid var(--border)', borderRadius: 'var(--r-xl)', overflow: 'hidden' }}>
+
+                {/* Message thread */}
+                {chatHistory.length > 0 && (
+                  <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 420, overflowY: 'auto' }}>
+                    {chatHistory.map((msg, i) => (
+                      <div key={i}>
+                        <div style={{
+                          alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                          display: 'inline-block',
+                          maxWidth: '85%',
+                          background: msg.role === 'user' ? 'var(--ink)' : 'var(--sandstone)',
+                          color: msg.role === 'user' ? 'var(--parchment)' : 'var(--ink)',
+                          borderRadius: msg.role === 'user' ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
+                          padding: '10px 14px',
+                          fontSize: 14,
+                          lineHeight: 1.6,
+                        }}>
+                          {msg.content}
+                        </div>
+                        {msg.role === 'assistant' && msg.follow_up_questions?.length > 0 && (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                            {msg.follow_up_questions.map((q, j) => (
+                              <button
+                                key={j}
+                                onClick={() => handleChatSend(q)}
+                                disabled={chatLoading}
+                                style={{ background: 'var(--ochre-glow)', border: 'none', borderRadius: 20, padding: '4px 12px', fontSize: 12, cursor: 'pointer', color: 'var(--ochre-deep)', fontWeight: 600 }}
+                              >
+                                {q}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                    {chatLoading && (
+                      <div style={{ fontSize: 13, color: 'var(--ink-3)', fontStyle: 'italic' }}>Thinking…</div>
+                    )}
+                    {chatError && (
+                      <div style={{ fontSize: 13, color: 'var(--vermillion)' }}>{chatError}</div>
+                    )}
+                    <div ref={chatBottomRef} />
+                  </div>
+                )}
+
+                {/* Input row */}
+                <div style={{ display: 'flex', gap: 8, padding: '12px 16px', borderTop: chatHistory.length > 0 ? '1px solid var(--border)' : 'none', background: 'var(--parchment)' }}>
+                  <input
+                    type="text"
+                    value={chatInput}
+                    onChange={e => setChatInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChatSend() } }}
+                    placeholder="Ask anything about this note…"
+                    disabled={chatLoading}
+                    style={{ flex: 1, padding: '9px 14px', borderRadius: 'var(--r-s)', border: '1.5px solid var(--border)', background: 'var(--parchment)', color: 'var(--ink)', fontSize: 14, outline: 'none', fontFamily: 'var(--f-body)' }}
+                    onFocus={e => { e.target.style.borderColor = 'var(--ochre)' }}
+                    onBlur={e => { e.target.style.borderColor = 'var(--border)' }}
+                  />
+                  <button
+                    className="btn btn-ochre btn-sm"
+                    onClick={() => handleChatSend()}
+                    disabled={chatLoading || !chatInput.trim()}
+                  >
+                    {chatLoading ? '…' : 'Send'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </>
   )

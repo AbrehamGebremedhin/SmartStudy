@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams, useNavigate } from 'react-router-dom'
 import ConfigPanel from '../components/ui/ConfigPanel'
 import DifficultyTag from '../components/ui/DifficultyTag'
 import EmptyState from '../components/ui/EmptyState'
@@ -12,13 +12,23 @@ const DEFAULT_CONFIG = {
   unit: '1',
   difficulty: 'medium',
   numItems: 5,
+  topic: null,
 }
 
 export default function MCQ() {
   const [searchParams, setSearchParams] = useSearchParams()
+  const navigate = useNavigate()
   const genId = searchParams.get('gen')
 
-  const [config, setConfig] = useState(DEFAULT_CONFIG)
+  const fromNote = searchParams.get('from_note')
+  const fromChat = searchParams.get('from_chat')
+
+  const [config, setConfig] = useState(() => ({
+    ...DEFAULT_CONFIG,
+    subject: searchParams.get('subject') || DEFAULT_CONFIG.subject,
+    grade: searchParams.get('grade') ? Number(searchParams.get('grade')) : DEFAULT_CONFIG.grade,
+    topic: searchParams.get('topic') || DEFAULT_CONFIG.topic,
+  }))
   const [questions, setQuestions] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -60,8 +70,11 @@ export default function MCQ() {
         subject: config.subject,
         grade: config.grade,
         unit: config.unit,
+        topic: config.topic || null,
         num_questions: config.numItems,
         difficulty: config.difficulty,
+        note_id: fromNote || null,
+        chat_session_id: fromChat || null,
       })
       const qs = res.questions ?? []
       const gid = res.generation_id
@@ -115,6 +128,12 @@ export default function MCQ() {
         <p>Curriculum-based questions with explanations</p>
       </div>
       <div className="pg-body">
+        {(fromNote || fromChat) && !genId && (
+          <div style={{ padding: '10px 14px', background: 'var(--ochre-glow)', borderRadius: 'var(--r-s)', marginBottom: 12, fontSize: 13, color: 'var(--ochre-deep)', fontWeight: 600 }}>
+            {fromNote ? '📄 Generating from your note — topic and subject are pre-filled.' : '💬 Generating from your chat session.'}
+          </div>
+        )}
+
         {showConfig ? (
           <ConfigPanel
             config={config}
@@ -124,6 +143,7 @@ export default function MCQ() {
             numItemsLabel="Questions"
             generateLabel="Generate Questions"
             excludeSubjects={['sat']}
+            showTopic={!fromNote && !fromChat}
           />
         ) : (
           <div style={{ marginBottom: 16 }}>
@@ -157,7 +177,21 @@ export default function MCQ() {
         )}
 
         {/* If exam is complete, show results first, then questions below */}
-        {allAnswered && score && <MCQResults questions={questions} selected={selected} score={score} />}
+        {allAnswered && score && (
+          <>
+            <MCQResults questions={questions} selected={selected} score={score} />
+            {config.topic && (
+              <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'flex-end' }}>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => navigate(`/notes?subject=${config.subject}&grade=${config.grade}&topic=${encodeURIComponent(config.topic)}`)}
+                >
+                  Generate Notes on "{config.topic}" →
+                </button>
+              </div>
+            )}
+          </>
+        )}
 
         {questions.map((q, qi) => {
           const isRevealed = revealed[qi]

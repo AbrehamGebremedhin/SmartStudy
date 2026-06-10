@@ -1,3 +1,5 @@
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -6,11 +8,27 @@ from app.core.curriculum_validation import validate_curriculum_params
 from app.db import crud
 from app.db.database import get_db
 from app.db.models import User
-from app.schemas.requests import NotesRequest
-from app.schemas.responses import NotesResponse
+from app.schemas.requests import NoteChatRequest, NotesRequest
+from app.schemas.responses import NoteChatResponse, NotesResponse
 from app.security.rate_limiter import limiter
 from app.services.cache import _parse_token_usage, compute_request_hash
-from app.services.generation import run_generate_notes
+from app.services.generation import run_generate_notes, run_note_chat
+
+
+def _format_chat_context(messages) -> str:
+    lines, concepts = [], []
+    for m in messages:
+        if m.role == "user":
+            lines.append(f"Student: {m.content}")
+        elif m.role == "assistant":
+            lines.append(f"Teacher: {m.content}")
+            for c in (m.key_concepts or []):
+                if c not in concepts:
+                    concepts.append(c)
+    result = "\n".join(lines)
+    if concepts:
+        result += f"\n\nKey concepts covered: {', '.join(concepts)}"
+    return result
 
 router = APIRouter(prefix="/notes", tags=["Notes"])
 
@@ -26,11 +44,19 @@ async def generate_notes(
 ) -> NotesResponse:
     validate_curriculum_params(body.subject, body.grade, body.unit)
 
+    chat_context: str | None = None
+    if body.chat_session_id:
+        chat_session = await crud.get_chat_session_with_messages(db, body.chat_session_id, current_user.id)
+        if not chat_session:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat session not found.")
+        chat_context = _format_chat_context(chat_session.messages)
+
     params = {
         "subject": body.subject,
         "topic": body.topic,
         "grade": body.grade,
         "unit": body.unit,
+        "chat_session_id": str(body.chat_session_id) if body.chat_session_id else None,
         "version": body.version,
     }
     request_hash = compute_request_hash(params)
@@ -52,6 +78,7 @@ async def generate_notes(
         grade=body.grade,
         unit=body.unit,
         version=body.version,
+        chat_context=chat_context,
     )
 
     if result.get("error"):
@@ -96,5 +123,45 @@ async def generate_notes(
         generation_id=generation.id,
         was_cache_hit=False,
         notes=result["notes"],
+        token_usage=result.get("token_usage"),
+    )
+
+
+@router.post("/{generation_id}/chat", response_model=NoteChatResponse)
+@limiter.limit("500/day")
+@limiter.limit("30/minute")
+async def chat_with_note(
+    request: Request,
+    generation_id: uuid.UUID,
+    body: NoteChatRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> NoteChatResponse:
+    note_gen = await crud.get_generation_for_user(db, current_user.id, generation_id, "notes")
+    if not note_gen:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found.")
+
+    note_content = note_gen.content.get("notes", {})
+    subject = note_gen.request_params.get("subject", "")
+
+    chat_history_str = "\n".join(
+        f"{'Student' if m.get('role') == 'user' else 'Teacher'}: {m.get('content', '')}"
+        for m in body.chat_history
+    )
+
+    result = await run_note_chat(
+        note_content=note_content,
+        subject=subject,
+        question=body.question,
+        chat_history_str=chat_history_str,
+    )
+
+    if result.get("error"):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=result["error"])
+
+    return NoteChatResponse(
+        answer=result["answer"],
+        key_concepts=result.get("key_concepts", []),
+        follow_up_questions=result.get("follow_up_questions", []),
         token_usage=result.get("token_usage"),
     )

@@ -1,3 +1,4 @@
+import uuid
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -24,6 +25,8 @@ class MCQRequest(BaseModel):
     grade: ValidGrade | None = None
     unit: str | None = Field(default=None, min_length=1, max_length=50)
     topic: str | None = Field(default=None, min_length=1, max_length=200)
+    note_id: uuid.UUID | None = None
+    chat_session_id: uuid.UUID | None = None
     num_questions: int = Field(default=5, ge=1, le=20)
     difficulty: Literal["easy", "medium", "hard", "challenging"] = "medium"
 
@@ -38,6 +41,8 @@ class FlashcardRequest(BaseModel):
     grade: ValidGrade | None = None
     unit: str | None = Field(default=None, min_length=1, max_length=50)
     topic: str | None = Field(default=None, min_length=1, max_length=200)
+    note_id: uuid.UUID | None = None
+    chat_session_id: uuid.UUID | None = None
     num_cards: int = Field(default=5, ge=1, le=20)
     difficulty: Literal["easy", "medium", "hard", "challenging"] = "medium"
 
@@ -52,12 +57,23 @@ class NotesRequest(BaseModel):
     topic: str = Field(min_length=1, max_length=200)
     grade: ValidGrade | None = None
     unit: str | None = Field(default=None, min_length=1, max_length=50)
+    chat_session_id: uuid.UUID | None = None
     version: str = Field(default="1.0", max_length=10)
 
     @field_validator("topic", "unit", mode="before")
     @classmethod
     def sanitize_text_fields(cls, v: str | None) -> str | None:
         return _clean(v) if v is not None else v
+
+
+class NoteChatRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+    chat_history: list[dict] = Field(default_factory=list, max_length=20)
+
+    @field_validator("question", mode="before")
+    @classmethod
+    def sanitize_question(cls, v: str) -> str:
+        return _clean(v)
 
 
 class ChatSessionCreateRequest(BaseModel):

@@ -106,6 +106,33 @@ export default function Chat() {
         />
       )}
 
+      {activeSession && messages.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', background: 'var(--sandstone)', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginRight: 4 }}>Study tools:</span>
+          <button
+            className="btn btn-ghost btn-sm"
+            style={{ fontSize: 12 }}
+            onClick={() => navigate(`/notes?from_chat=${activeSession.id}&subject=${activeSession.subject}${activeSession.grade ? `&grade=${activeSession.grade}` : ''}&topic=${encodeURIComponent(activeSession.title)}`)}
+          >
+            Generate Notes
+          </button>
+          <button
+            className="btn btn-ghost btn-sm"
+            style={{ fontSize: 12 }}
+            onClick={() => navigate(`/mcq?from_chat=${activeSession.id}&subject=${activeSession.subject}${activeSession.grade ? `&grade=${activeSession.grade}` : ''}`)}
+          >
+            Practice MCQs
+          </button>
+          <button
+            className="btn btn-ghost btn-sm"
+            style={{ fontSize: 12 }}
+            onClick={() => navigate(`/flashcards?from_chat=${activeSession.id}&subject=${activeSession.subject}${activeSession.grade ? `&grade=${activeSession.grade}` : ''}`)}
+          >
+            Create Flashcards
+          </button>
+        </div>
+      )}
+
       <div className="chat-wrap">
         {messages.length === 0 && !activeSession && (
           <div

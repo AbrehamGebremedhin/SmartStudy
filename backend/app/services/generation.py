@@ -34,6 +34,8 @@ async def run_generate_mcqs(
     topic: str | None,
     num_questions: int,
     difficulty: str,
+    note_content: dict | None = None,
+    chat_context: str | None = None,
 ) -> dict:
     agent = get_agent()
     result = await agent.generate_mcqs(
@@ -41,6 +43,8 @@ async def run_generate_mcqs(
         grade=grade,
         unit=unit,
         topic=topic,
+        note_content=note_content,
+        chat_context=chat_context,
         num_questions=num_questions,
         difficulty=difficulty,
     )
@@ -54,6 +58,8 @@ async def run_generate_flashcards(
     topic: str | None,
     num_cards: int,
     difficulty: str,
+    note_content: dict | None = None,
+    chat_context: str | None = None,
 ) -> dict:
     agent = get_agent()
     result = await agent.generate_flashcards(
@@ -63,6 +69,8 @@ async def run_generate_flashcards(
         topic=topic,
         num_cards=num_cards,
         difficulty=difficulty,
+        note_content=note_content,
+        chat_context=chat_context,
     )
     return sanitize_output(result)
 
@@ -73,6 +81,7 @@ async def run_generate_notes(
     grade: int | None,
     unit: str | None,
     version: str,
+    chat_context: str | None = None,
 ) -> dict:
     agent = get_agent()
     result = await agent.generate_notes(
@@ -81,6 +90,23 @@ async def run_generate_notes(
         grade=grade,
         unit=unit,
         version=version,
+        chat_context=chat_context,
+    )
+    return sanitize_output(result)
+
+
+async def run_note_chat(
+    note_content: dict,
+    subject: str,
+    question: str,
+    chat_history_str: str = "",
+) -> dict:
+    agent = get_agent()
+    result = await agent.note_chat_response(
+        note_content=note_content,
+        subject=subject,
+        question=question,
+        chat_history_str=chat_history_str,
     )
     return sanitize_output(result)
 

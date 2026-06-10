@@ -93,6 +93,24 @@ async def link_user_generation(
     return ug
 
 
+async def get_generation_for_user(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    generation_id: uuid.UUID,
+    generation_type: str | None = None,
+) -> Generation | None:
+    """Return a Generation only if it belongs to the given user."""
+    query = (
+        select(Generation)
+        .join(UserGeneration, UserGeneration.generation_id == Generation.id)
+        .where(UserGeneration.user_id == user_id, Generation.id == generation_id)
+    )
+    if generation_type:
+        query = query.where(Generation.type == generation_type)
+    result = await db.execute(query)
+    return result.scalar_one_or_none()
+
+
 async def get_user_history(
     db: AsyncSession,
     user_id: uuid.UUID,
