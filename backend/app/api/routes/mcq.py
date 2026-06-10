@@ -30,6 +30,7 @@ async def generate_mcqs(
         "subject": body.subject,
         "grade": body.grade,
         "unit": body.unit,
+        "topic": body.topic,
         "num_questions": body.num_questions,
         "difficulty": body.difficulty,
     }
@@ -51,6 +52,7 @@ async def generate_mcqs(
         subject=body.subject,
         grade=body.grade,
         unit=body.unit,
+        topic=body.topic,
         num_questions=body.num_questions,
         difficulty=body.difficulty,
     )

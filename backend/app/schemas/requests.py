@@ -23,12 +23,13 @@ class MCQRequest(BaseModel):
     subject: ValidSubject
     grade: ValidGrade | None = None
     unit: str | None = Field(default=None, min_length=1, max_length=50)
+    topic: str | None = Field(default=None, min_length=1, max_length=200)
     num_questions: int = Field(default=5, ge=1, le=20)
     difficulty: Literal["easy", "medium", "hard", "challenging"] = "medium"
 
-    @field_validator("unit", mode="before")
+    @field_validator("unit", "topic", mode="before")
     @classmethod
-    def sanitize_unit(cls, v: str | None) -> str | None:
+    def sanitize_text_fields(cls, v: str | None) -> str | None:
         return _clean(v) if v is not None else v
 
 

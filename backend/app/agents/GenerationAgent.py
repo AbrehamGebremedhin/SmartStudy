@@ -101,6 +101,7 @@ class GenerationAgent:
 
     @retry_on_none(max_retries=3)
     async def generate_mcqs(self, subject: str, grade: int, unit: str,
+                            topic: str | None = None,
                             num_questions: int = 5, difficulty: str = "hard") -> Dict[str, Any]:
         """Generate multiple choice questions with comprehensive validation."""
         token_usage = TokenCount(0, 0, 0.0)
@@ -108,7 +109,14 @@ class GenerationAgent:
             if difficulty not in ["easy", "medium", "hard", "challenging"]:
                 difficulty = "medium"
 
-            context_response = await self._retrieve_mcq_context(subject, grade, unit, difficulty)
+            if topic:
+                question = f"Generate {difficulty} MCQs for this content on the topic of {topic}"
+                context_response = await self.context_agent.query_db(
+                    subject=subject, question=question,
+                    grade=None, unit=None, type_req="quiz",
+                )
+            else:
+                context_response = await self._retrieve_mcq_context(subject, grade, unit, difficulty)
             if context_response.error:
                 return {"error": context_response.error}
 

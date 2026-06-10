@@ -31,6 +31,7 @@ async def run_generate_mcqs(
     subject: str,
     grade: int | None,
     unit: str | None,
+    topic: str | None,
     num_questions: int,
     difficulty: str,
 ) -> dict:
@@ -39,6 +40,7 @@ async def run_generate_mcqs(
         subject=subject,
         grade=grade,
         unit=unit,
+        topic=topic,
         num_questions=num_questions,
         difficulty=difficulty,
     )
