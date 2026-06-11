@@ -35,7 +35,7 @@ async def test_topic_calls_query_db_directly(agent):
     mock_context.error = None
     mock_context.context = []
     mock_context.parsed_answer = {"areas": []}
-    agent.context_agent.query_db = AsyncMock(return_value=mock_context)
+    agent.context_agent.query_documents_only = AsyncMock(return_value=mock_context)
     agent.validation_agent.validate_mcqs = AsyncMock(
         return_value={"needs_replacement": False, "valid_mcqs": [], "invalid_indices": []}
     )
@@ -55,8 +55,8 @@ async def test_topic_calls_query_db_directly(agent):
             topic="Photosynthesis", num_questions=1, difficulty="medium"
         )
 
-    agent.context_agent.query_db.assert_awaited_once()
-    call_kwargs = agent.context_agent.query_db.call_args.kwargs
+    agent.context_agent.query_documents_only.assert_awaited_once()
+    call_kwargs = agent.context_agent.query_documents_only.call_args.kwargs
     assert call_kwargs["grade"] is None
     assert call_kwargs["unit"] is None
     assert "Photosynthesis" in call_kwargs["question"]
@@ -90,7 +90,7 @@ async def test_no_topic_calls_retrieve_mcq_context(agent):
         )
 
     agent._retrieve_mcq_context.assert_awaited_once_with("biology", 11, "2", "medium")
-    agent.context_agent.query_db.assert_not_called()
+    agent.context_agent.query_documents_only.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -99,7 +99,7 @@ async def test_topic_query_string_contains_difficulty(agent):
     mock_context.error = None
     mock_context.context = []
     mock_context.parsed_answer = {"areas": []}
-    agent.context_agent.query_db = AsyncMock(return_value=mock_context)
+    agent.context_agent.query_documents_only = AsyncMock(return_value=mock_context)
     agent.validation_agent.validate_mcqs = AsyncMock(
         return_value={"needs_replacement": False, "valid_mcqs": [], "invalid_indices": []}
     )
@@ -119,6 +119,6 @@ async def test_topic_query_string_contains_difficulty(agent):
             topic="Periodic Table", num_questions=1, difficulty="hard"
         )
 
-    question_arg = agent.context_agent.query_db.call_args.kwargs["question"]
+    question_arg = agent.context_agent.query_documents_only.call_args.kwargs["question"]
     assert "hard" in question_arg
     assert "Periodic Table" in question_arg
