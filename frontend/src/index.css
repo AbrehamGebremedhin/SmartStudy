@@ -34,6 +34,9 @@
   --r-l: 16px;
   --r-xl: 22px;
 
+  /* Reading column — centers long-form content on wide screens */
+  --read-col: 880px;
+
   --f-display: 'Playfair Display', Georgia, serif;
   --f-body: 'Source Sans 3', sans-serif;
   --f-mono: 'JetBrains Mono', monospace;
@@ -873,12 +876,14 @@ select:focus, input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px rg
 .chat-tabs {
   display: flex;
   overflow-x: auto;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 2px solid var(--border-2);
   padding: 0 18px;
-  background: var(--parchment);
+  background: var(--sandstone);
   flex-shrink: 0;
   z-index: 40;
   scrollbar-width: none;
+  min-height: 46px;
+  align-items: stretch;
 }
 @media (min-width: 768px) { .chat-tabs { padding: 0 44px; } }
 .chat-tabs::-webkit-scrollbar { display: none; }
@@ -892,13 +897,13 @@ select:focus, input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px rg
   background: none;
   cursor: pointer;
   border-bottom: 2px solid transparent;
-  transition: all 0.15s;
-  margin-bottom: -1px;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  margin-bottom: -2px;
   white-space: nowrap;
   flex-shrink: 0;
 }
-.ct-btn:hover { color: var(--ink); }
-.ct-btn.on { color: var(--ochre); border-bottom-color: var(--ochre); }
+.ct-btn:hover { color: var(--ink); background: rgba(30,22,16,0.04); }
+.ct-btn.on { color: var(--ochre); border-bottom-color: var(--ochre); background: var(--parchment); }
 .chat-msgs {
   flex: 1;
   min-height: 0;
@@ -908,7 +913,7 @@ select:focus, input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px rg
   flex-direction: column;
   gap: 20px;
 }
-@media (min-width: 768px) { .chat-msgs { padding: 32px 44px; max-width: 780px; width: 100%; } }
+@media (min-width: 768px) { .chat-msgs { padding: 32px 44px; max-width: 780px; width: 100%; margin-inline: auto; } }
 .chat-empty {
   flex: 1;
   display: flex;
@@ -975,12 +980,13 @@ select:focus, input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px rg
 .c-msg.assistant .c-bub { background: var(--card); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
 .chat-bar {
   padding: 12px 18px 18px;
-  border-top: 1px solid var(--border);
-  background: var(--parchment);
+  border-top: 2px solid var(--border-2);
+  background: var(--sandstone);
+  box-shadow: 0 -4px 16px rgba(30,22,16,0.07);
   flex-shrink: 0;
 }
 @media (min-width: 768px) { .chat-bar { padding: 14px 44px 24px; } }
-.cb-wrap { display: flex; gap: 10px; align-items: flex-end; max-width: 720px; }
+.cb-wrap { display: flex; gap: 10px; align-items: flex-end; max-width: 720px; margin: 0 auto; }
 .cb-in {
   flex: 1;
   padding: 11px 16px;
@@ -1013,7 +1019,14 @@ select:focus, input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px rg
 .cb-send:hover { background: var(--ochre-deep); }
 
 /* ── Notes ── */
-.notes-w { max-width: 860px; }
+.notes-w { max-width: 100%; }
+/* Center the pre-generation setup view (config + empty/loading) too */
+.notes-setup .pg-top > *,
+.notes-setup .pg-body > * {
+  width: 100%;
+  max-width: var(--read-col);
+  margin-inline: auto;
+}
 .n-sec { margin-bottom: 36px; }
 .n-sec-t {
   font-family: var(--f-display);
@@ -1652,6 +1665,16 @@ select:focus, input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px rg
 
 /* ── Notes: docked reading view (content scrolls, actions + composer pinned) ── */
 .notes-screen .pg-top { position: static; top: auto; flex-shrink: 0; }
+/* Center header, body, and dock onto one reading column on wide screens.
+   Each region keeps its own padding as the outer gutter; only the inner
+   content is constrained + centered, so all three left-edges line up. */
+.notes-screen .pg-top > *,
+.notes-scroll > *,
+.notes-dock > * {
+  width: 100%;
+  max-width: var(--read-col);
+  margin-inline: auto;
+}
 .notes-scroll {
   flex: 1;
   min-height: 0;
@@ -1661,8 +1684,9 @@ select:focus, input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px rg
 @media (min-width: 768px) { .notes-scroll { padding: 24px 44px 32px; } }
 .notes-dock {
   flex-shrink: 0;
-  border-top: 1px solid var(--border);
-  background: var(--parchment);
+  border-top: 2px solid var(--border-2);
+  background: var(--sandstone);
+  box-shadow: 0 -4px 16px rgba(30,22,16,0.07);
   padding: 10px 18px calc(12px + env(safe-area-inset-bottom, 0));
   display: flex;
   flex-direction: column;

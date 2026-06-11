@@ -209,7 +209,7 @@ export default function Notes() {
 
   // ── Config / empty / loading view ──
   return (
-    <>
+    <div className="notes-setup">
       <div className="pg-top">
         <h2>Study Notes</h2>
         <p>Comprehensive notes with worked examples</p>
@@ -249,7 +249,7 @@ export default function Notes() {
           />
         )}
       </div>
-    </>
+    </div>
   )
 }
 
@@ -599,7 +599,7 @@ function PracticeProblem({ index, problem }) {
     <div className="n-card" style={{ marginBottom: 10 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, marginBottom: problem.hints?.length ? 10 : 0 }}>
         <div className="n-text" style={{ fontWeight: 600, color: 'var(--ink)' }}>
-          {index + 1}. {problem.question}
+          {index + 1}. {String(problem.question).replace(/^\d+\.\s*/, '')}
         </div>
         {problem.difficulty_level && (
           <span style={{ fontSize: 10, padding: '3px 10px', borderRadius: 20, background: 'var(--ochre-glow)', color: 'var(--ochre-deep)', fontWeight: 800, flexShrink: 0 }}>
@@ -637,7 +637,9 @@ function ReviewQuestion({ index, question, subject, note }) {
   const [result, setResult] = useState(null)
   const [evalError, setEvalError] = useState(null)
 
-  const text = typeof question === 'string' ? question : question.question ?? question.text ?? ''
+  const rawText = typeof question === 'string' ? question : question.question ?? question.text ?? ''
+  const text = rawText.replace(/^\d+\.\s*/, '')
+  const inputId = `rq-answer-${index}`
 
   async function handleEvaluate() {
     if (!draft.trim()) return
@@ -666,8 +668,8 @@ function ReviewQuestion({ index, question, subject, note }) {
 
   return (
     <div className="n-card" style={{ marginBottom: 10 }}>
-      {/* Question */}
-      <div className="n-text" style={{ fontWeight: 600, color: 'var(--ink)', marginBottom: 14 }}>
+      {/* Question — also serves as the accessible label for the textarea below */}
+      <div id={inputId + '-label'} className="n-text" style={{ fontWeight: 600, color: 'var(--ink)', marginBottom: 14 }}>
         {index + 1}. {text}
       </div>
 
@@ -675,6 +677,8 @@ function ReviewQuestion({ index, question, subject, note }) {
       {!result && (
         <>
           <textarea
+            id={inputId}
+            aria-labelledby={inputId + '-label'}
             value={draft}
             onChange={e => setDraft(e.target.value)}
             placeholder="Write your answer here…"

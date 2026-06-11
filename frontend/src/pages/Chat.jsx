@@ -17,6 +17,8 @@ export default function Chat() {
   const navigate = useNavigate()
 
   const [sessions, setSessions] = useState([])
+  const [sessionsLoading, setSessionsLoading] = useState(true)
+  const [sessionsError, setSessionsError] = useState(null)
   const [activeSession, setActiveSession] = useState(null)
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
@@ -30,7 +32,10 @@ export default function Chat() {
   const endRef = useRef(null)
 
   useEffect(() => {
-    listSessions().then(setSessions).catch(console.error)
+    listSessions()
+      .then(setSessions)
+      .catch(e => setSessionsError(e.message ?? 'Failed to load sessions'))
+      .finally(() => setSessionsLoading(false))
   }, [])
 
   useEffect(() => {
@@ -182,12 +187,27 @@ export default function Chat() {
 
       <div className="chat-msgs">
         {messages.length === 0 && !activeSession ? (
-          <div className="chat-empty" onClick={() => setShowNewModal(true)}>
+          <div className="chat-empty">
             <div className="chat-empty-ico"><Icon name="tutor" size={36} stroke={1.5} /></div>
-            <div style={{ fontSize: 14, color: 'var(--ink-3)' }}>No sessions yet</div>
-            <button className="btn btn-ochre btn-sm" onClick={e => { e.stopPropagation(); setShowNewModal(true) }}>
-              + New Session
-            </button>
+            {sessionsLoading ? (
+              <div style={{ fontSize: 14, color: 'var(--ink-3)' }}>Loading sessions…</div>
+            ) : sessionsError ? (
+              <>
+                <div style={{ fontSize: 14, color: 'var(--vermillion)' }}>{sessionsError}</div>
+                <button className="btn btn-ghost btn-sm" onClick={() => {
+                  setSessionsError(null)
+                  setSessionsLoading(true)
+                  listSessions().then(setSessions).catch(e => setSessionsError(e.message ?? 'Failed to load sessions')).finally(() => setSessionsLoading(false))
+                }}>Retry</button>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 14, color: 'var(--ink-3)' }}>No sessions yet</div>
+                <button className="btn btn-ochre btn-sm" onClick={() => setShowNewModal(true)}>
+                  + New Session
+                </button>
+              </>
+            )}
           </div>
         ) : (
           <>

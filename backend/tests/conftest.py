@@ -13,6 +13,7 @@ from unittest.mock import patch
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://dummy:dummy@localhost:5432/dummy")
 os.environ.setdefault("DEEPSEEK_API_KEY", "sk-test-dummy-key-not-real")
 os.environ.setdefault("GOOGLE_CLIENT_ID", "test-client-id.apps.googleusercontent.com")
+os.environ.setdefault("SECRET_KEY", "test-secret-key-not-real")
 # ────────────────────────────────────────────────────────────────────────────
 
 import pytest
