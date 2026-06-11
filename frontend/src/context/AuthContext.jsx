@@ -68,7 +68,16 @@ export function AuthProvider({ children }) {
       if (msUntilExpiry < 5 * 60 * 1000 && window.google?.accounts?.id) {
         window.google.accounts.id.initialize({
           client_id: GOOGLE_CLIENT_ID,
-          callback: ({ credential }) => login(credential),
+          callback: async ({ credential }) => {
+            const res = await fetch('/api/auth/login', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ credential }),
+            })
+            if (!res.ok) return
+            const { access_token } = await res.json()
+            login(access_token)
+          },
         })
         window.google.accounts.id.prompt()
       }

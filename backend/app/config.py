@@ -8,7 +8,9 @@ class Settings(BaseSettings):
     database_url: str
     deepseek_api_key: str
     google_client_id: str
+    secret_key: str
     chat_session_ttl_hours: int = 24
+    app_token_expire_days: int = 30
     poppler_path: str | None = None
     allowed_origins: list[str] = ["http://localhost:3000", "http://localhost:5173"]
 

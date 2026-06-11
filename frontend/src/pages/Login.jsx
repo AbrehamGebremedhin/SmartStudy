@@ -18,8 +18,15 @@ export default function Login() {
       if (!window.google?.accounts?.id) return
       window.google.accounts.id.initialize({
         client_id: GOOGLE_CLIENT_ID,
-        callback: ({ credential }) => {
-          login(credential)
+        callback: async ({ credential }) => {
+          const res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ credential }),
+          })
+          if (!res.ok) return
+          const { access_token } = await res.json()
+          login(access_token)
           navigate('/')
         },
       })

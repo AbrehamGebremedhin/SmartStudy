@@ -4,7 +4,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.google import verify_token
+from app.auth.tokens import verify_app_token
 from app.db.crud import get_or_create_user
 from app.db.database import get_db
 from app.db.models import User
@@ -21,7 +21,7 @@ async def get_current_user(
     db: AsyncSession = Depends(get_db),
 ) -> User:
     try:
-        payload = await verify_token(credentials.credentials)
+        payload = await verify_app_token(credentials.credentials)
     except HTTPException:
         await record(
             event_type=AUTH_FAILURE,

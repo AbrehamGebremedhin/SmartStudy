@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
 
-from app.api.routes import chat, evaluation, flashcards, history, mcq, notes
+from app.api.routes import auth, chat, evaluation, flashcards, history, mcq, notes
 from app.config import settings
 from app.core.exceptions import OutOfContextError
 from app.db.database import Base, engine, get_db
@@ -107,6 +107,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
+app.include_router(auth.router, prefix="/api")
 app.include_router(mcq.router, prefix="/api")
 app.include_router(flashcards.router, prefix="/api")
 app.include_router(notes.router, prefix="/api")
