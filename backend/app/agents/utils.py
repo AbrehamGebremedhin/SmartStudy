@@ -115,13 +115,23 @@ def parse_llm_response(response: str, logger: logging.Logger = None) -> Dict[str
                 else:
                     parsed["response"] = clean_unicode(str(parsed["response"]))
 
+        # Chat / context-refinement responses
         if "response" in parsed or "key_concepts" in parsed:
             return parsed
 
-        if "questions" not in parsed and "flashcards" not in parsed:
-            return {"error": "Invalid response format", "raw_response": cleaned}
+        # MCQ / flashcard responses
+        if "questions" in parsed or "flashcards" in parsed:
+            return parsed
 
-        return parsed
+        # Notes core response (title/overview/key_concepts/theoretical_framework/connections)
+        # Notes applied response (formulas/worked_examples/practice_problems/real_world_applications/review_questions)
+        _notes_keys = {"title", "overview", "learning_objectives", "theoretical_framework",
+                       "connections", "formulas_and_equations", "worked_examples",
+                       "practice_problems", "real_world_applications", "review_questions"}
+        if parsed.keys() & _notes_keys:
+            return parsed
+
+        return {"error": "Invalid response format", "raw_response": cleaned}
 
     except json.JSONDecodeError as e:
         if logger:

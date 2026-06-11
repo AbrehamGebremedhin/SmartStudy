@@ -1,4 +1,3 @@
-import asyncio
 import os
 import json
 import logging
@@ -259,15 +258,12 @@ class ContextRefinementAgent:
                 )
 
             prompt = self.get_prompt(type_req)
-            summarize_kwargs = {"max_length": 1000, "include_structure": True} if type_req == "notes" else {}
-            answer, summary = await asyncio.gather(
-                self._run_chain(prompt, {
-                    "context": context,
-                    "student_question": question,
-                    "subject": subject,
-                }),
-                self.summarize_content(context, **summarize_kwargs),
-            )
+            answer = await self._run_chain(prompt, {
+                "context": context,
+                "student_question": question,
+                "subject": subject,
+            })
+            summary = {}
 
             clean_answer = str(answer.strip()).replace("\\", '')
             parsed_answer = self.parser.parse(clean_answer)
@@ -291,4 +287,40 @@ class ContextRefinementAgent:
             return RefinementResponse(context="", parsed_answer={}, summary={}, error=f"Validation error: {str(e)}")
         except Exception as e:
             self.logger.error(f"Error processing query: {str(e)}")
+            return RefinementResponse(context="", parsed_answer={}, summary={}, error=f"Processing error: {str(e)}")
+
+    async def query_documents_only(
+        self,
+        subject: str,
+        question: str,
+        grade: Optional[int] = None,
+        unit: Optional[str] = None,
+        type_req: str = "quiz",
+    ) -> RefinementResponse:
+        """Vector DB retrieval only — no LLM extraction. Faster path for MCQ/flashcard generation."""
+        try:
+            self.validate_inputs(subject, question, grade, unit)
+            if type_req == "notes":
+                context = await self.retrieval_agent.query_vector_store(
+                    subject, question, grade, unit, "notes", k_multiplier=1.25
+                )
+            else:
+                context = await self.retrieval_agent.query_vector_store(
+                    subject, question, grade, unit, type_req
+                )
+            if not context:
+                return RefinementResponse(
+                    context="", parsed_answer={}, summary={},
+                    error="No relevant documents found"
+                )
+            return RefinementResponse(
+                context=context,
+                parsed_answer={"areas": [], "key_concepts": []},
+                summary={},
+            )
+        except ValueError as e:
+            self.logger.error(f"Validation error: {str(e)}")
+            return RefinementResponse(context="", parsed_answer={}, summary={}, error=f"Validation error: {str(e)}")
+        except Exception as e:
+            self.logger.error(f"Error in query_documents_only: {str(e)}")
             return RefinementResponse(context="", parsed_answer={}, summary={}, error=f"Processing error: {str(e)}")

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -31,18 +31,48 @@ def _format_chat_context(messages) -> str:
 router = APIRouter(prefix="/mcq", tags=["MCQ"])
 
 
+async def _record_cache_hit(db: AsyncSession, user_id, generation_id) -> None:
+    await crud.link_user_generation(db, user_id, generation_id, was_cache_hit=True)
+    await db.commit()
+
+
 @router.post("/generate", response_model=MCQResponse)
 @limiter.limit("200/day")
 @limiter.limit("10/minute")
 async def generate_mcqs(
     request: Request,
     body: MCQRequest,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> MCQResponse:
     validate_curriculum_params(body.subject, body.grade, body.unit)
 
-    # Resolve note / chat context before hashing so different sources cache separately.
+    # Hash uses IDs only (not content), so compute it before any DB calls.
+    params = {
+        "subject": body.subject,
+        "grade": body.grade,
+        "unit": body.unit,
+        "topic": body.topic,
+        "note_id": str(body.note_id) if body.note_id else None,
+        "chat_session_id": str(body.chat_session_id) if body.chat_session_id else None,
+        "num_questions": body.num_questions,
+        "difficulty": body.difficulty,
+    }
+    request_hash = compute_request_hash(params)
+
+    # Check cache before loading note/chat content — skips a DB round-trip on hits.
+    cached = await crud.get_cached_generation(db, request_hash, "mcq")
+    if cached:
+        background_tasks.add_task(_record_cache_hit, db, current_user.id, cached.id)
+        return MCQResponse(
+            generation_id=cached.id,
+            was_cache_hit=True,
+            questions=cached.content["questions"],
+            difficulty=cached.content.get("difficulty", body.difficulty),
+        )
+
+    # Cache miss — load note/chat context only now that we know generation is needed.
     note_content: dict | None = None
     chat_context: str | None = None
 
@@ -57,30 +87,6 @@ async def generate_mcqs(
         if not chat_session:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat session not found.")
         chat_context = _format_chat_context(chat_session.messages)
-
-    params = {
-        "subject": body.subject,
-        "grade": body.grade,
-        "unit": body.unit,
-        "topic": body.topic,
-        "note_id": str(body.note_id) if body.note_id else None,
-        "chat_session_id": str(body.chat_session_id) if body.chat_session_id else None,
-        "num_questions": body.num_questions,
-        "difficulty": body.difficulty,
-    }
-    request_hash = compute_request_hash(params)
-
-    cached = await crud.get_cached_generation(db, request_hash, "mcq")
-
-    if cached:
-        ug = await crud.link_user_generation(db, current_user.id, cached.id, was_cache_hit=True)
-        await db.commit()
-        return MCQResponse(
-            generation_id=cached.id,
-            was_cache_hit=True,
-            questions=cached.content["questions"],
-            difficulty=cached.content.get("difficulty", body.difficulty),
-        )
 
     result = await run_generate_mcqs(
         subject=body.subject,

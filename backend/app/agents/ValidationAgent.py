@@ -22,6 +22,7 @@ class ValidationAgent:
             raise ValueError("DEEPSEEK_API_KEY not found in environment")
 
         self.llm = ChatDeepSeek(model="deepseek-v4-flash", api_key=api_key)
+        self._json_llm = self.llm.bind(response_format={"type": "json_object"})
         # NOTE: tiktoken's gpt-3.5-turbo encoding is an APPROXIMATION for DeepSeek, which
         # uses a different tokenizer. Token counts and cost estimates are indicative only.
         self.token_counter = tiktoken.encoding_for_model("gpt-3.5-turbo")
@@ -44,8 +45,7 @@ class ValidationAgent:
     async def _run_chain(self, prompt: PromptTemplate, inputs: dict) -> str:
         if "context" in inputs:
             inputs = {**inputs, "context": _format_docs(inputs["context"])}
-        json_llm = self.llm.bind(response_format={"type": "json_object"})
-        chain = prompt | json_llm | StrOutputParser()
+        chain = prompt | self._json_llm | StrOutputParser()
         return await chain.ainvoke(inputs)
 
     async def validate_mcqs(self, mcqs: List[Dict], context, areas: List[str]) -> Dict[str, Any]:
@@ -448,4 +448,67 @@ class ValidationAgent:
             }
         except Exception:
             # Fail open — validation hiccups must never block legitimate requests.
+            return {"is_covered": True, "available_topics": [], "token_usage": str(_zero)}
+
+    async def validate_coverage_from_context(
+        self,
+        topic: str,
+        context,
+        subject: str,
+        grade: "int | None",
+        unit: "str | None",
+    ) -> "Dict[str, Any]":
+        """Check topic coverage directly from retrieved documents — no pre-extracted key_concepts needed.
+
+        Single LLM call that replaces the old two-step query_db(notes) + validate_topic_coverage
+        flow, cutting one sequential LLM round-trip from the notes pipeline.
+        Fails open so validation hiccups never block legitimate requests.
+        """
+        _zero = TokenCount(0, 0, 0.0)
+
+        grade_unit_str = ""
+        if grade is not None:
+            grade_unit_str += f" Grade {grade}"
+        if unit is not None:
+            grade_unit_str += f" Unit {unit}"
+
+        prompt = PromptTemplate.from_template("""
+            A student requested study notes on: "{topic}"
+
+            Below are curriculum excerpts from {subject}{grade_unit}.
+
+            Does the content cover "{topic}" or a closely related concept?
+            Consider synonyms and related terminology (e.g. "ATP synthesis" covers
+            "adenosine triphosphate production").
+
+            Curriculum excerpts:
+            {context}
+
+            Return JSON only:
+            {{
+                "is_covered": true_or_false,
+                "reason": "one sentence",
+                "available_topics": ["up to 5 most relevant topics mentioned in the excerpts"]
+            }}
+        """)
+
+        try:
+            response = await self._run_chain(prompt, {
+                "topic": topic,
+                "subject": subject,
+                "grade_unit": grade_unit_str,
+                "context": context,
+            })
+            result = json.loads(str(response))
+            token_usage = self.record_token_usage(
+                f"{topic}\n{subject}\n{_format_docs(context)}",
+                str(result),
+            )
+            return {
+                "is_covered": result.get("is_covered", True),
+                "available_topics": result.get("available_topics", []),
+                "reason": result.get("reason", ""),
+                "token_usage": str(token_usage),
+            }
+        except Exception:
             return {"is_covered": True, "available_topics": [], "token_usage": str(_zero)}

@@ -10,8 +10,8 @@ engine = create_async_engine(
     settings.database_url,
     echo=False,
     poolclass=AsyncAdaptedQueuePool,
-    pool_size=5,
-    max_overflow=10,
+    pool_size=15,
+    max_overflow=15,
     pool_pre_ping=True,          # Verify connections are alive before use
     pool_recycle=1800,           # Recycle connections every 30 minutes
     connect_args={

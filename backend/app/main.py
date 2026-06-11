@@ -24,6 +24,15 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    # Eagerly init the generation agent singleton and pre-warm the Ollama embedding
+    # model so the first real request doesn't pay the cold-load penalty (~25 s).
+    try:
+        from app.services.generation import get_agent
+        _agent = get_agent()
+        await _agent.context_agent.retrieval_agent.embeddings.aembed_query("warmup")
+        logger.info("Ollama embedding model warmed up")
+    except Exception as _e:
+        logger.warning("Ollama warmup skipped (Ollama may not be running): %s", _e)
     yield
     await engine.dispose()
 

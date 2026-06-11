@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from typing import List, Optional
 from langchain_core.documents import Document
 from langchain_ollama import OllamaEmbeddings
@@ -135,10 +136,14 @@ class RetrievalAgent:
 
         for attempt in range(self.MAX_RETRIES):
             try:
+                _t = time.perf_counter()
                 query_vector = await self.embeddings.aembed_query(question)
+                logger.info("[retrieval] embed: %.2fs", time.perf_counter() - _t)
+
                 k = self._calculate_k(type_req, k_multiplier)
                 expr = self._build_filter(subject, grade, unit, type_req)
 
+                _t = time.perf_counter()
                 results = await asyncio.to_thread(
                     self.client.search,
                     collection_name=COLLECTION_NAME,
@@ -148,6 +153,7 @@ class RetrievalAgent:
                     output_fields=["text", "grade", "subject", "unit", "source"],
                     search_params={"nprobe": 128},  # exhaustive search across all IVF clusters
                 )
+                logger.info("[retrieval] milvus-search (k=%d): %.2fs", k, time.perf_counter() - _t)
 
                 documents = [
                     Document(

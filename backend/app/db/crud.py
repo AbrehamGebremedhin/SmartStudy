@@ -1,9 +1,8 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.sql.expression import func
 
 from app.config import settings
 from app.db.models import ChatMessage, ChatSession, Generation, SecurityEvent, User, UserGeneration
@@ -45,7 +44,6 @@ async def get_cached_generation(
     result = await db.execute(
         select(Generation)
         .where(Generation.request_hash == request_hash, Generation.type == generation_type)
-        .order_by(func.random())
         .limit(1)
     )
     return result.scalar_one_or_none()
@@ -239,11 +237,12 @@ async def add_chat_message(
     )
     db.add(message)
 
-    # bump updated_at on the session
-    result = await db.execute(select(ChatSession).where(ChatSession.id == session_id))
-    session = result.scalar_one_or_none()
-    if session:
-        session.updated_at = datetime.now(timezone.utc)
+    # bump updated_at on the session without a round-trip SELECT
+    await db.execute(
+        update(ChatSession)
+        .where(ChatSession.id == session_id)
+        .values(updated_at=datetime.now(timezone.utc))
+    )
 
     await db.flush()
     await db.refresh(message)
