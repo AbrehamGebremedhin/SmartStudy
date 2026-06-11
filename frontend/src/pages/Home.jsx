@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import SubjectChips from '../components/ui/SubjectChips'
 import Icon from '../components/ui/Icon'
+import Stele from '../components/ui/Stele'
+import CountUp from '../components/ui/CountUp'
 import { GRADES, getDaysUntilEUEE, subjectLabel, typeIcon } from '../lib/curriculum'
 import { getLevelInfo, getStreak, getStats, getLastActivity } from '../lib/gamification'
 import { getHistory } from '../services/history.service'
@@ -44,6 +46,7 @@ export default function Home() {
   return (
     <div className="pg-body">
       <div className="hero anim">
+        <Stele mono height={260} className="hero-stele" />
         <div className="hero-hi">ሰላም፣</div>
         <div className="hero-name">Welcome back, {firstName}</div>
         <div className="hero-sub">
@@ -77,21 +80,21 @@ export default function Home() {
 
         {isEUEE && (
           <div className="euee-block">
-            <span className="euee-num pulse">{days}</span>
+            <span className="euee-num pulse"><CountUp value={days} duration={1100} /></span>
             <span className="euee-txt">days until<br />EUEE 2027</span>
           </div>
         )}
         <div className="stats-row">
           <div className="stat-box">
-            <div className="stat-v">{stats.questionsAnswered > 0 ? stats.questionsAnswered : '—'}</div>
+            <div className="stat-v"><CountUp value={stats.questionsAnswered > 0 ? stats.questionsAnswered : NaN} /></div>
             <div className="stat-l">Questions</div>
           </div>
           <div className="stat-box">
-            <div className="stat-v">{stats.accuracyPct != null ? `${stats.accuracyPct}%` : '—'}</div>
+            <div className="stat-v"><CountUp value={stats.accuracyPct != null ? stats.accuracyPct : NaN} suffix="%" /></div>
             <div className="stat-l">Accuracy</div>
           </div>
           <div className="stat-box">
-            <div className="stat-v">{sessions ?? '—'}</div>
+            <div className="stat-v"><CountUp value={sessions == null ? NaN : sessions} /></div>
             <div className="stat-l">Sessions</div>
           </div>
         </div>

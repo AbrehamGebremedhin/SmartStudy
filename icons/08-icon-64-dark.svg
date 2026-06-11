@@ -1,0 +1,28 @@
+<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <!-- SmartStudy — App icon 64px dark -->
+  <rect width="64" height="64" rx="14" fill="#1E1610" />
+  <g transform="translate(22, 4) scale(0.28)">
+    <ellipse cx="18" cy="6" rx="10" ry="5" fill="#A06B10" />
+    <rect x="15" y="8" width="6" height="4" fill="#C4841D" />
+    <polygon points="3,12 33,12 36,190 0,190" fill="#C4841D" />
+    <rect x="-4" y="34" width="44" height="3" rx="1" fill="#A06B10" />
+    <rect x="-3" y="62" width="42" height="3" rx="1" fill="#A06B10" />
+    <rect x="-2" y="90" width="40" height="3" rx="1" fill="#A06B10" />
+    <rect x="-1" y="118" width="39" height="3" rx="1" fill="#A06B10" />
+    <rect x="-1" y="146" width="39" height="3" rx="1" fill="#A06B10" />
+    <rect x="7" y="17" width="8" height="13" rx="1" fill="#F6F0E4" opacity="0.9" />
+    <rect x="21" y="17" width="8" height="13" rx="1" fill="#F6F0E4" opacity="0.9" />
+    <rect x="7" y="39" width="8" height="19" rx="1" fill="#F6F0E4" opacity="0.85" />
+    <rect x="21" y="39" width="8" height="19" rx="1" fill="#F6F0E4" opacity="0.85" />
+    <rect x="6" y="67" width="9" height="19" rx="1" fill="#F6F0E4" opacity="0.82" />
+    <rect x="21" y="67" width="9" height="19" rx="1" fill="#F6F0E4" opacity="0.82" />
+    <rect x="6" y="95" width="9" height="19" rx="1" fill="#F6F0E4" opacity="0.8" />
+    <rect x="22" y="95" width="9" height="19" rx="1" fill="#F6F0E4" opacity="0.8" />
+    <rect x="5" y="123" width="10" height="19" rx="1" fill="#F6F0E4" opacity="0.78" />
+    <rect x="22" y="123" width="10" height="19" rx="1" fill="#F6F0E4" opacity="0.78" />
+    <line x1="18" y1="14" x2="18" y2="144" stroke="#A06B10" stroke-width="1.2" />
+    <rect x="8" y="152" width="21" height="34" rx="2" fill="#F6F0E4" opacity="0.72" />
+    <rect x="6" y="150" width="25" height="3" rx="1" fill="#A06B10" />
+    <rect x="-6" y="190" width="48" height="8" rx="2" fill="#A06B10" />
+  </g>
+</svg>

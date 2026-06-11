@@ -304,6 +304,45 @@ export function getLastActivity() {
   return load().lastGen
 }
 
+/**
+ * Build a GitHub-style activity calendar from daily XP totals.
+ * Returns whole weeks (Sun→Sat columns) covering the last `weeks` weeks up to
+ * today, each day carrying its XP and a 0–4 intensity level for colouring.
+ */
+export function getActivityCalendar(weeks = 10) {
+  const activity = load().activity
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+
+  // End on the Saturday of the current week so the final column is complete.
+  const end = new Date(today)
+  end.setDate(end.getDate() + (6 - end.getDay()))
+  const totalDays = weeks * 7
+  const start = new Date(end)
+  start.setDate(start.getDate() - (totalDays - 1))
+
+  const todayKey = dateStr(today)
+  const cols = []
+  let max = 0
+  for (const k of Object.keys(activity)) max = Math.max(max, num(activity[k]))
+
+  for (let w = 0; w < weeks; w++) {
+    const col = []
+    for (let d = 0; d < 7; d++) {
+      const date = new Date(start)
+      date.setDate(date.getDate() + w * 7 + d)
+      const key = dateStr(date)
+      const xp = num(activity[key])
+      const future = date > today
+      let level = 0
+      if (xp > 0) level = max > 0 ? Math.min(4, 1 + Math.floor((xp / max) * 3)) : 1
+      col.push({ key, xp, level, future, isToday: key === todayKey })
+    }
+    cols.push(col)
+  }
+  return { cols, max }
+}
+
 /** Remember the most recent generation so Home can offer "continue studying". */
 export function recordLastGen(meta) {
   const p = load()

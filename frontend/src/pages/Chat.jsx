@@ -22,6 +22,7 @@ export default function Chat() {
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState(null)
+  const [failedQ, setFailedQ] = useState(null)
   const [showNewModal, setShowNewModal] = useState(false)
   const [contextGrade, setContextGrade] = useState(null)
   const [contextUnit, setContextUnit] = useState(null)
@@ -73,13 +74,19 @@ export default function Chat() {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  async function handleSend() {
-    if (!input.trim() || !activeSession || sending) return
-    const question = input.trim()
-    setInput('')
-    setMessages(m => [...m, { role: 'user', content: question, id: Date.now() }])
+  async function handleSend(retryQ) {
+    // retryQ is a string only when invoked from the inline error's Retry button;
+    // click/key handlers pass an event, so guard on the type.
+    const isRetry = typeof retryQ === 'string'
+    const question = isRetry ? retryQ : input.trim()
+    if (!question || !activeSession || sending) return
+    if (!isRetry) {
+      setInput('')
+      setMessages(m => [...m, { role: 'user', content: question, id: Date.now() }])
+    }
     setSending(true)
     setError(null)
+    setFailedQ(null)
     try {
       const res = await sendMessage(activeSession.id, question)
       const answerText = res.current_response?.answer ?? res.current_response?.content ?? ''
@@ -98,7 +105,8 @@ export default function Chat() {
         sessionStorage.setItem(`ctx_${activeSession.id}`, JSON.stringify({ grade, unit }))
       }
     } catch (e) {
-      setError(e.message)
+      setError(e)
+      setFailedQ(question)
     } finally {
       setSending(false)
     }
@@ -118,7 +126,7 @@ export default function Chat() {
   const userInitial = activeSession?.subject?.[0]?.toUpperCase() ?? 'U'
 
   return (
-    <>
+    <div className="chat-screen flex-screen">
       <div className="chat-tabs">
         {sessions.map(s => (
           <button
@@ -172,84 +180,86 @@ export default function Chat() {
         </div>
       )}
 
-      <div className="chat-wrap">
-        {messages.length === 0 && !activeSession && (
-          <div
-            onClick={() => setShowNewModal(true)}
-            style={{
-              flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-              flexDirection: 'column', gap: 14, cursor: 'pointer',
-            }}
-          >
+      <div className="chat-msgs">
+        {messages.length === 0 && !activeSession ? (
+          <div className="chat-empty" onClick={() => setShowNewModal(true)}>
             <div className="chat-empty-ico"><Icon name="tutor" size={36} stroke={1.5} /></div>
             <div style={{ fontSize: 14, color: 'var(--ink-3)' }}>No sessions yet</div>
             <button className="btn btn-ochre btn-sm" onClick={e => { e.stopPropagation(); setShowNewModal(true) }}>
               + New Session
             </button>
           </div>
+        ) : (
+          <>
+            {messages.map((m, i) => (
+              <div key={m.id ?? i} className={`c-msg ${m.role}`}>
+                <div className="c-av">
+                  {m.role === 'user' ? userInitial : 'S'}
+                </div>
+                <div className="c-bub">
+                  <MessageContent text={m.content} />
+                </div>
+              </div>
+            ))}
+            {sending && (
+              <div className="c-msg assistant">
+                <div className="c-av">S</div>
+                <div className="c-bub">
+                  <span className="typing" aria-label="Tutor is thinking"><i /><i /><i /></span>
+                </div>
+              </div>
+            )}
+            <div ref={endRef} />
+          </>
         )}
+      </div>
 
-        <div className="chat-msgs">
-          {messages.map((m, i) => (
-            <div key={m.id ?? i} className={`c-msg ${m.role}`}>
-              <div className="c-av">
-                {m.role === 'user' ? userInitial : 'S'}
-              </div>
-              <div className="c-bub">
-                <MessageContent text={m.content} />
-              </div>
-            </div>
-          ))}
-          {sending && (
-            <div className="c-msg assistant">
-              <div className="c-av">S</div>
-              <div className="c-bub">
-                <span className="typing" aria-label="Tutor is thinking"><i /><i /><i /></span>
-              </div>
-            </div>
-          )}
-          <div ref={endRef} />
-        </div>
-
-        {error && (
-          <div style={{ padding: '8px 18px', color: 'var(--vermillion)', fontSize: 13 }}>
-            {error}
-          </div>
-        )}
-
-        <div className="chat-bar">
-          <div
-            className="cb-wrap"
-            onClick={!activeSession ? () => setShowNewModal(true) : undefined}
-            style={!activeSession ? { cursor: 'pointer' } : undefined}
-          >
-            <textarea
-              className="cb-in"
-              placeholder={activeSession ? 'Ask anything about your subjects…' : 'Click to start a new session…'}
-              value={input}
-              disabled={!activeSession || sending}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  handleSend()
-                }
-              }}
-              rows={1}
-              style={!activeSession ? { pointerEvents: 'none' } : undefined}
-            />
-            <button
-              className="cb-send"
-              onClick={!activeSession ? () => setShowNewModal(true) : handleSend}
-              disabled={sending}
-              aria-label="Send message"
-            >
-              <Icon name="send" size={19} />
+      {error && (
+        <div className="chat-err" role="alert">
+          <span className="chat-err-msg">
+            {error.isNetwork && <Icon name="wifi-off" size={15} stroke={1.5} />}
+            {error.message ?? error}
+          </span>
+          {failedQ && (
+            <button className="chat-err-retry" onClick={() => handleSend(failedQ)}>
+              <Icon name="retry" size={14} /> Retry
             </button>
-          </div>
+          )}
+        </div>
+      )}
+
+      <div className="chat-bar">
+        <div
+          className="cb-wrap"
+          onClick={!activeSession ? () => setShowNewModal(true) : undefined}
+          style={!activeSession ? { cursor: 'pointer' } : undefined}
+        >
+          <textarea
+            className="cb-in"
+            placeholder={activeSession ? 'Ask anything about your subjects…' : 'Click to start a new session…'}
+            value={input}
+            disabled={!activeSession || sending}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                handleSend()
+              }
+            }}
+            rows={1}
+            style={!activeSession ? { pointerEvents: 'none' } : undefined}
+          />
+          <button
+            className="cb-send"
+            onClick={!activeSession ? () => setShowNewModal(true) : handleSend}
+            disabled={sending}
+            aria-label="Send message"
+          >
+            <Icon name="send" size={19} />
+          </button>
         </div>
       </div>
-    </>
+    </div>
   )
 }
 

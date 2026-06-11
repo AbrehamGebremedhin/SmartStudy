@@ -9,11 +9,19 @@ async function request(method, path, body) {
   const headers = { 'Content-Type': 'application/json' }
   if (token) headers['Authorization'] = `Bearer ${token}`
 
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  })
+  let res
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    })
+  } catch {
+    // Network unreachable, DNS failure, server down, CORS, etc.
+    const e = new Error("Can't reach the server. Check your connection and try again.")
+    e.isNetwork = true
+    throw e
+  }
 
   if (res.status === 401) {
     localStorage.removeItem('ss_token')

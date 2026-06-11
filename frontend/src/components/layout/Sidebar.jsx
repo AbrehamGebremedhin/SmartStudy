@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import Icon from '../ui/Icon'
+import Stele from '../ui/Stele'
 import { getLevelInfo } from '../../lib/gamification'
 
 const NAV_ITEMS = [
@@ -13,15 +14,18 @@ const NAV_ITEMS = [
 ]
 
 export default function Sidebar() {
-  const { user } = useAuth()
+  const { user, logout } = useAuth()
   const initial = user?.name?.[0]?.toUpperCase() ?? 'S'
   const [level] = useState(() => getLevelInfo())
 
   return (
     <div className="d-side">
       <div className="ds-brand">
-        <div className="ds-title">SmartStudy</div>
-        <div className="ds-geez">ብልሃት ትምህርቲ</div>
+        <Stele height={48} className="ds-mark" title="SmartStudy" />
+        <div className="ds-brand-text">
+          <div className="ds-title">SmartStudy</div>
+          <div className="ds-geez">ብልሃት ትምህርቲ</div>
+        </div>
       </div>
 
       <div className="ds-nav">
@@ -58,6 +62,10 @@ export default function Sidebar() {
             <div className="ds-user-level">{level.geez} · {level.translation}</div>
           </div>
         </div>
+        <button className="ds-btn ds-logout" onClick={logout}>
+          <span className="ds-ico"><Icon name="logout" size={17} /></span>
+          Sign out
+        </button>
       </div>
     </div>
   )

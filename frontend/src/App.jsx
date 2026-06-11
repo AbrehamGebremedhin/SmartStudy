@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import NotFound from './pages/NotFound'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import Sidebar from './components/layout/Sidebar'
 import MobileHeader from './components/layout/MobileHeader'
@@ -26,7 +27,7 @@ function AppShell() {
           <Route path="/chat" element={<Chat />} />
           <Route path="/chat/:sessionId" element={<Chat />} />
           <Route path="/history" element={<History />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
+          <Route path="*" element={<NotFound />} />
         </Routes>
       </div>
       <GamifyLayer />

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { STUDY_TIPS } from '../../lib/gamification'
+import Stele from './Stele'
 
 // Shared LLM-wait state: ring + bar + rotating study tip to keep the
 // 10–30s generation pause engaging.
@@ -13,7 +14,7 @@ export default function LoadingState({ title, sub }) {
 
   return (
     <div className="loading-state">
-      <div className="loading-ring" />
+      <Stele mono height={56} className="loading-stele" />
       <div className="loading-bar" />
       <div className="loading-title">{title}</div>
       <div className="loading-sub">{sub}</div>

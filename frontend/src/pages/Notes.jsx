@@ -3,6 +3,7 @@ import { useSearchParams, useNavigate } from 'react-router-dom'
 import ConfigPanel from '../components/ui/ConfigPanel'
 import EmptyState from '../components/ui/EmptyState'
 import LoadingState from '../components/ui/LoadingState'
+import ErrorState from '../components/ui/ErrorState'
 import { generateNotes, chatWithNote } from '../services/notes.service'
 import { evaluateAnswer } from '../services/evaluation.service'
 import { saveGeneration, loadGeneration } from '../lib/genStorage'
@@ -86,7 +87,7 @@ export default function Notes() {
       awardXP('gen_notes', { subject: config.subject })
       recordLastGen({ type: 'notes', genId: res.generation_id, subject: config.subject, grade: config.grade, unit: config.unit, topic: config.topic })
     } catch (e) {
-      setError(e.message)
+      setError(e)
     } finally {
       setLoading(false)
     }
@@ -111,14 +112,16 @@ export default function Notes() {
     }
   }
 
-  return (
-    <>
-      <div className="pg-top">
-        <h2>Study Notes</h2>
-        <p>Comprehensive notes with worked examples</p>
-      </div>
-      <div className="pg-body">
-        {genId && notes ? (
+  // ── Docked reading view: note scrolls, actions + composer pinned ──
+  if (notes && currentGenId) {
+    return (
+      <div className="notes-screen flex-screen">
+        <div className="pg-top">
+          <h2>Study Notes</h2>
+          <p>Comprehensive notes with worked examples</p>
+        </div>
+
+        <div className="notes-scroll">
           <div style={{ marginBottom: 16 }}>
             <button className="btn btn-ghost btn-sm" onClick={() => {
               setSearchParams({})
@@ -127,24 +130,109 @@ export default function Notes() {
               ← New Notes
             </button>
           </div>
-        ) : (
-          <ConfigPanel
-            config={config}
-            onChange={handleChange}
-            onGenerate={handleGenerate}
-            loading={loading}
-            showDifficulty={false}
-            showNumItems={false}
-            showTopic={true}
-            generateLabel="Generate Notes"
-          />
-        )}
 
-        {error && (
+          <NotesContent notes={notes} subject={config.subject} />
+
+          {chatHistory.length > 0 && (
+            <div className="n-chat-thread-flow">
+              <h3 className="n-sec-t">Ask About This Note</h3>
+              {chatHistory.map((msg, i) => (
+                <div key={i}>
+                  <div className={msg.role === 'user' ? 'n-chat-msg-user' : 'n-chat-msg-asst'}>
+                    {msg.content}
+                  </div>
+                  {msg.role === 'assistant' && msg.follow_up_questions?.length > 0 && (
+                    <div className="n-chat-follow-ups">
+                      {msg.follow_up_questions.map((q, j) => (
+                        <button
+                          key={j}
+                          className="n-chat-follow-btn"
+                          onClick={() => handleChatSend(q)}
+                          disabled={chatLoading}
+                        >
+                          {q}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+              {chatLoading && (
+                <span className="typing" aria-label="Thinking"><i /><i /><i /></span>
+              )}
+              {chatError && (
+                <div style={{ fontSize: 13, color: 'var(--vermillion)' }}>{chatError}</div>
+              )}
+              <div ref={chatBottomRef} />
+            </div>
+          )}
+        </div>
+
+        <div className="notes-dock">
+          <div className="n-whats-next">
+            <span className="n-whats-next-label">Study with:</span>
+            <button
+              className="btn btn-ochre btn-sm"
+              onClick={() => navigate(`/mcq?from_note=${currentGenId}&subject=${config.subject}&grade=${config.grade}&unit=${config.unit}&topic=${encodeURIComponent(notes.title || config.topic)}`)}
+            >
+              Practice MCQs
+            </button>
+            <button
+              className="btn btn-indigo btn-sm"
+              onClick={() => navigate(`/flashcards?from_note=${currentGenId}&subject=${config.subject}&grade=${config.grade}&unit=${config.unit}&topic=${encodeURIComponent(notes.title || config.topic)}`)}
+            >
+              Create Flashcards
+            </button>
+          </div>
+          <div className="n-chat-input-row with-thread">
+            <input
+              type="text"
+              className="n-chat-input"
+              value={chatInput}
+              onChange={e => setChatInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChatSend() } }}
+              placeholder="Ask anything about this note…"
+              disabled={chatLoading}
+            />
+            <button
+              className="btn btn-ochre btn-sm"
+              onClick={() => handleChatSend()}
+              disabled={chatLoading || !chatInput.trim()}
+            >
+              {chatLoading ? '…' : 'Send'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ── Config / empty / loading view ──
+  return (
+    <>
+      <div className="pg-top">
+        <h2>Study Notes</h2>
+        <p>Comprehensive notes with worked examples</p>
+      </div>
+      <div className="pg-body">
+        <ConfigPanel
+          config={config}
+          onChange={handleChange}
+          onGenerate={handleGenerate}
+          loading={loading}
+          showDifficulty={false}
+          showNumItems={false}
+          showTopic={true}
+          generateLabel="Generate Notes"
+        />
+
+        {error && (typeof error === 'string' ? (
           <div style={{ color: 'var(--vermillion)', marginBottom: 16, fontSize: 14 }}>
             {error}
           </div>
-        )}
+        ) : (
+          <ErrorState title="Couldn't generate notes" error={error} onRetry={handleGenerate} />
+        ))}
 
         {loading && (
           <LoadingState
@@ -153,92 +241,12 @@ export default function Notes() {
           />
         )}
 
-        {!loading && !notes && !error && (
+        {!loading && !error && (
           <EmptyState
             icon="notes"
             title="Generate Study Notes"
             description="Enter a topic for detailed notes with key concepts, examples, and review questions."
           />
-        )}
-
-        {notes && <NotesContent notes={notes} subject={config.subject} />}
-
-        {notes && currentGenId && (
-          <>
-            {/* ── What's Next? ── */}
-            <div className="n-whats-next">
-              <span className="n-whats-next-label">Study with:</span>
-              <button
-                className="btn btn-ochre btn-sm"
-                onClick={() => navigate(`/mcq?from_note=${currentGenId}&subject=${config.subject}&grade=${config.grade}&unit=${config.unit}&topic=${encodeURIComponent(notes.title || config.topic)}`)}
-              >
-                Practice MCQs
-              </button>
-              <button
-                className="btn btn-indigo btn-sm"
-                onClick={() => navigate(`/flashcards?from_note=${currentGenId}&subject=${config.subject}&grade=${config.grade}&unit=${config.unit}&topic=${encodeURIComponent(notes.title || config.topic)}`)}
-              >
-                Create Flashcards
-              </button>
-            </div>
-
-            {/* ── Note Chat ── */}
-            <div className="n-chat-wrap">
-              <h3 className="n-sec-t" style={{ marginBottom: 16 }}>Ask About This Note</h3>
-              <div className="n-chat-box">
-                {chatHistory.length > 0 && (
-                  <div className="n-chat-thread">
-                    {chatHistory.map((msg, i) => (
-                      <div key={i}>
-                        <div className={msg.role === 'user' ? 'n-chat-msg-user' : 'n-chat-msg-asst'}>
-                          {msg.content}
-                        </div>
-                        {msg.role === 'assistant' && msg.follow_up_questions?.length > 0 && (
-                          <div className="n-chat-follow-ups">
-                            {msg.follow_up_questions.map((q, j) => (
-                              <button
-                                key={j}
-                                className="n-chat-follow-btn"
-                                onClick={() => handleChatSend(q)}
-                                disabled={chatLoading}
-                              >
-                                {q}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                    {chatLoading && (
-                      <span className="typing" aria-label="Thinking"><i /><i /><i /></span>
-                    )}
-                    {chatError && (
-                      <div style={{ fontSize: 13, color: 'var(--vermillion)' }}>{chatError}</div>
-                    )}
-                    <div ref={chatBottomRef} />
-                  </div>
-                )}
-                <div className={`n-chat-input-row${chatHistory.length > 0 ? ' with-thread' : ''}`}>
-                  <input
-                    type="text"
-                    className="n-chat-input"
-                    value={chatInput}
-                    onChange={e => setChatInput(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChatSend() } }}
-                    placeholder="Ask anything about this note…"
-                    disabled={chatLoading}
-                  />
-                  <button
-                    className="btn btn-ochre btn-sm"
-                    onClick={() => handleChatSend()}
-                    disabled={chatLoading || !chatInput.trim()}
-                  >
-                    {chatLoading ? '…' : 'Send'}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </>
         )}
       </div>
     </>

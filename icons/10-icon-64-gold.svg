@@ -1,0 +1,28 @@
+<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <!-- SmartStudy — App icon 64px gold -->
+  <rect width="64" height="64" rx="14" fill="#C4841D" />
+  <g transform="translate(22, 4) scale(0.28)">
+    <ellipse cx="18" cy="6" rx="10" ry="5" fill="#F6F0E4" opacity="0.5" />
+    <rect x="15" y="8" width="6" height="4" fill="#FFFDF8" />
+    <polygon points="3,12 33,12 36,190 0,190" fill="#FFFDF8" />
+    <rect x="-4" y="34" width="44" height="3" rx="1" fill="#F6F0E4" opacity="0.4" />
+    <rect x="-3" y="62" width="42" height="3" rx="1" fill="#F6F0E4" opacity="0.4" />
+    <rect x="-2" y="90" width="40" height="3" rx="1" fill="#F6F0E4" opacity="0.4" />
+    <rect x="-1" y="118" width="39" height="3" rx="1" fill="#F6F0E4" opacity="0.4" />
+    <rect x="-1" y="146" width="39" height="3" rx="1" fill="#F6F0E4" opacity="0.4" />
+    <rect x="7" y="17" width="8" height="13" rx="1" fill="#A06B10" opacity="0.5" />
+    <rect x="21" y="17" width="8" height="13" rx="1" fill="#A06B10" opacity="0.5" />
+    <rect x="7" y="39" width="8" height="19" rx="1" fill="#A06B10" opacity="0.45" />
+    <rect x="21" y="39" width="8" height="19" rx="1" fill="#A06B10" opacity="0.45" />
+    <rect x="6" y="67" width="9" height="19" rx="1" fill="#A06B10" opacity="0.4" />
+    <rect x="21" y="67" width="9" height="19" rx="1" fill="#A06B10" opacity="0.4" />
+    <rect x="6" y="95" width="9" height="19" rx="1" fill="#A06B10" opacity="0.38" />
+    <rect x="22" y="95" width="9" height="19" rx="1" fill="#A06B10" opacity="0.38" />
+    <rect x="5" y="123" width="10" height="19" rx="1" fill="#A06B10" opacity="0.35" />
+    <rect x="22" y="123" width="10" height="19" rx="1" fill="#A06B10" opacity="0.35" />
+    <line x1="18" y1="14" x2="18" y2="144" stroke="#F6F0E4" stroke-width="1.2" opacity="0.3" />
+    <rect x="8" y="152" width="21" height="34" rx="2" fill="#A06B10" opacity="0.4" />
+    <rect x="6" y="150" width="25" height="3" rx="1" fill="#F6F0E4" opacity="0.3" />
+    <rect x="-6" y="190" width="48" height="8" rx="2" fill="#F6F0E4" opacity="0.3" />
+  </g>
+</svg>

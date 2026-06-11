@@ -6,6 +6,9 @@ import { loadGeneration, routeForType } from '../lib/genStorage'
 import { getLevelInfo, getStreak, getStats, getAchievements } from '../lib/gamification'
 import Icon from '../components/ui/Icon'
 import EmptyState from '../components/ui/EmptyState'
+import ErrorState from '../components/ui/ErrorState'
+import ActivityHeatmap from '../components/ui/ActivityHeatmap'
+import CountUp from '../components/ui/CountUp'
 
 const FILTERS = [
   { key: 'all', label: 'All' },
@@ -29,15 +32,17 @@ export default function History() {
   const [achievements] = useState(() => getAchievements())
   const unlockedCount = achievements.filter(a => a.unlockedAt).length
 
-  useEffect(() => {
+  function load() {
     setLoading(true)
     setError(null)
     const req = filter === 'all' ? getHistory() : getHistoryByType(filter)
     req
       .then(setItems)
-      .catch(e => setError(e.message))
+      .catch(setError)
       .finally(() => setLoading(false))
-  }, [filter])
+  }
+
+  useEffect(load, [filter])
 
   function formatDate(iso) {
     if (!iso) return ''
@@ -105,11 +110,11 @@ export default function History() {
             <div className="ins-l">Day streak · best {streak.best}</div>
           </div>
           <div className="ins-box">
-            <div className="ins-v">{stats.questionsAnswered}</div>
+            <div className="ins-v"><CountUp value={stats.questionsAnswered} /></div>
             <div className="ins-l">Questions answered</div>
           </div>
           <div className="ins-box">
-            <div className="ins-v">{stats.accuracyPct != null ? `${stats.accuracyPct}%` : '—'}</div>
+            <div className="ins-v"><CountUp value={stats.accuracyPct != null ? stats.accuracyPct : NaN} suffix="%" /></div>
             <div className="ins-l">Accuracy</div>
           </div>
         </div>
@@ -127,6 +132,10 @@ export default function History() {
             ))}
           </div>
         )}
+
+        <div className="anim">
+          <ActivityHeatmap weeks={10} />
+        </div>
 
         <button
           className={`ach-toggle${showAch ? ' open' : ''}`}
@@ -170,7 +179,7 @@ export default function History() {
         )}
 
         {error && (
-          <div className="form-error">{error}</div>
+          <ErrorState title="Couldn't load history" error={error} onRetry={load} />
         )}
 
         {!loading && !error && items.length === 0 && (

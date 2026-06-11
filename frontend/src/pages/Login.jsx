@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import Stele from '../components/ui/Stele'
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID
 
@@ -51,6 +52,7 @@ export default function Login() {
   return (
     <div className="login-page">
       <div className="login-card">
+        <Stele tile height={76} className="login-mark" title="SmartStudy" />
         <div className="login-brand">SmartStudy</div>
         <div className="login-geez">ብልሃት ትምህርቲ</div>
         <p className="login-sub">
