@@ -4,10 +4,18 @@ import ConfigPanel from '../components/ui/ConfigPanel'
 import EmptyState from '../components/ui/EmptyState'
 import Icon from '../components/ui/Icon'
 import Confetti from '../components/ui/Confetti'
-import LoadingState from '../components/ui/LoadingState'
-import { generateFlashcards } from '../services/flashcards.service'
+import GeneratingState from '../components/ui/GeneratingState'
 import { saveGeneration, loadGeneration, updateGeneration } from '../lib/genStorage'
 import { awardXP, recordLastGen } from '../lib/gamification'
+import { useGenerationWS } from '../hooks/useGenerationWS'
+
+const FLASHCARD_STAGES = [
+  { id: 'validating',      label: 'Validating parameters…' },
+  { id: 'cache_check',     label: 'Checking for cached flashcards…' },
+  { id: 'loading_context', label: 'Loading curriculum context…' },
+  { id: 'generating',      label: 'Creating flashcards…' },
+  { id: 'saving',          label: 'Saving…' },
+]
 
 const DEFAULT_CONFIG = {
   subject: 'biology',
@@ -41,8 +49,10 @@ export default function Flashcards() {
     topic: searchParams.get('topic') || DEFAULT_CONFIG.topic,
   }))
   const [cards, setCards] = useState([])
-  const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+
+  const { connect, status: wsStatus, currentStageIndex, result: wsResult, error: wsError } = useGenerationWS('flashcards')
+  const loading = wsStatus === 'connecting' || wsStatus === 'running'
   const [idx, setIdx] = useState(0)
   const [flipped, setFlipped] = useState(false)
   const [ratings, setRatings] = useState({}) // { idx: 'known' | 'learning' }
@@ -86,32 +96,36 @@ export default function Flashcards() {
     setSearchParams({})
   }
 
-  async function handleGenerate() {
-    setLoading(true)
+  // Handle WS result
+  useEffect(() => {
+    if (!wsResult) return
+    const c = wsResult.flashcards ?? []
+    const gid = wsResult.generation_id
+    setCards(c)
+    saveGeneration(gid, { type: 'flashcard', cards: c, config, ratings: {} })
+    setSearchParams({ gen: gid })
+    awardXP('gen_flashcards', { subject: config.subject })
+    recordLastGen({ type: 'flashcard', genId: gid, subject: config.subject, grade: config.grade, unit: config.unit, topic: config.topic })
+  }, [wsResult]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Propagate WS errors
+  useEffect(() => {
+    if (wsError) setError(wsError.detail ?? 'Generation failed.')
+  }, [wsError])
+
+  function handleGenerate() {
     setError(null)
     resetDeckState()
-    try {
-      const res = await generateFlashcards({
-        subject: config.subject,
-        grade: config.grade,
-        unit: config.unit,
-        topic: config.topic || null,
-        num_cards: config.numItems,
-        difficulty: config.difficulty,
-        note_id: fromNote || null,
-        chat_session_id: fromChat || null,
-      })
-      const c = res.flashcards ?? []
-      setCards(c)
-      saveGeneration(res.generation_id, { type: 'flashcard', cards: c, config, ratings: {} })
-      setSearchParams({ gen: res.generation_id })
-      awardXP('gen_flashcards', { subject: config.subject })
-      recordLastGen({ type: 'flashcard', genId: res.generation_id, subject: config.subject, grade: config.grade, unit: config.unit, topic: config.topic })
-    } catch (e) {
-      setError(e.message)
-    } finally {
-      setLoading(false)
-    }
+    connect({
+      subject: config.subject,
+      grade: config.grade,
+      unit: config.unit,
+      topic: config.topic || null,
+      num_cards: config.numItems,
+      difficulty: config.difficulty,
+      note_id: fromNote || null,
+      chat_session_id: fromChat || null,
+    })
   }
 
   function advanceTo(next) {
@@ -229,9 +243,10 @@ export default function Flashcards() {
         )}
 
         {loading && (
-          <LoadingState
-            title="Generating flashcards…"
-            sub="Claude is crafting cards from your curriculum — this takes 5–10 seconds."
+          <GeneratingState
+            stageDefs={FLASHCARD_STAGES}
+            currentStageIndex={currentStageIndex}
+            status={wsStatus}
           />
         )}
 

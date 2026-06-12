@@ -2,12 +2,21 @@ import { useState, useEffect, useRef } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import ConfigPanel from '../components/ui/ConfigPanel'
 import EmptyState from '../components/ui/EmptyState'
-import LoadingState from '../components/ui/LoadingState'
+import GeneratingState from '../components/ui/GeneratingState'
 import ErrorState from '../components/ui/ErrorState'
-import { generateNotes, chatWithNote } from '../services/notes.service'
+import { chatWithNote } from '../services/notes.service'
 import { evaluateAnswer } from '../services/evaluation.service'
 import { saveGeneration, loadGeneration } from '../lib/genStorage'
 import { awardXP, recordLastGen } from '../lib/gamification'
+import { useGenerationWS } from '../hooks/useGenerationWS'
+
+const NOTES_STAGES = [
+  { id: 'validating',     label: 'Validating your request…' },
+  { id: 'cache_check',    label: 'Checking for cached content…' },
+  { id: 'loading_context', label: 'Searching curriculum documents…' },
+  { id: 'generating',     label: 'Writing your study notes…' },
+  { id: 'saving',         label: 'Saving to your library…' },
+]
 
 const DEFAULT_CONFIG = {
   subject: 'biology',
@@ -34,8 +43,10 @@ export default function Notes() {
   }))
   const [notes, setNotes] = useState(null)
   const [currentGenId, setCurrentGenId] = useState(null)
-  const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+
+  const { connect, status: wsStatus, currentStageIndex, result: wsResult, error: wsError } = useGenerationWS('notes')
+  const loading = wsStatus === 'connecting' || wsStatus === 'running'
 
   // Note chat state
   const [chatHistory, setChatHistory] = useState([])
@@ -63,34 +74,38 @@ export default function Notes() {
     if (key !== 'topic') setNotes(null)
   }
 
-  async function handleGenerate() {
+  // Handle WS result
+  useEffect(() => {
+    if (!wsResult) return
+    const n = wsResult.notes ?? null
+    const gid = wsResult.generation_id
+    setNotes(n)
+    setCurrentGenId(gid)
+    setChatHistory([])
+    saveGeneration(gid, { type: 'notes', notes: n, config })
+    setSearchParams({ gen: gid })
+    awardXP('gen_notes', { subject: config.subject })
+    recordLastGen({ type: 'notes', genId: gid, subject: config.subject, grade: config.grade, unit: config.unit, topic: config.topic })
+  }, [wsResult]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Propagate WS errors to local error state
+  useEffect(() => {
+    if (wsError) setError(wsError.detail ?? 'Generation failed.')
+  }, [wsError])
+
+  function handleGenerate() {
     if (!config.topic.trim()) {
       setError('Please enter a topic.')
       return
     }
-    setLoading(true)
     setError(null)
-    try {
-      const res = await generateNotes({
-        subject: config.subject,
-        topic: config.topic,
-        grade: config.grade,
-        unit: config.unit,
-        chat_session_id: fromChat || null,
-      })
-      const n = res.notes ?? null
-      setNotes(n)
-      setCurrentGenId(res.generation_id)
-      setChatHistory([])
-      saveGeneration(res.generation_id, { type: 'notes', notes: n, config })
-      setSearchParams({ gen: res.generation_id })
-      awardXP('gen_notes', { subject: config.subject })
-      recordLastGen({ type: 'notes', genId: res.generation_id, subject: config.subject, grade: config.grade, unit: config.unit, topic: config.topic })
-    } catch (e) {
-      setError(e)
-    } finally {
-      setLoading(false)
-    }
+    connect({
+      subject: config.subject,
+      topic: config.topic,
+      grade: config.grade,
+      unit: config.unit,
+      chat_session_id: fromChat || null,
+    })
   }
 
   async function handleChatSend(question) {
@@ -235,9 +250,10 @@ export default function Notes() {
         ))}
 
         {loading && (
-          <LoadingState
-            title="Generating notes…"
-            sub="Claude is writing comprehensive study notes — this usually takes 8–15 seconds."
+          <GeneratingState
+            stageDefs={NOTES_STAGES}
+            currentStageIndex={currentStageIndex}
+            status={wsStatus}
           />
         )}
 

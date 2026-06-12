@@ -5,10 +5,18 @@ import DifficultyTag from '../components/ui/DifficultyTag'
 import EmptyState from '../components/ui/EmptyState'
 import Icon from '../components/ui/Icon'
 import Confetti from '../components/ui/Confetti'
-import LoadingState from '../components/ui/LoadingState'
-import { generateMCQ } from '../services/mcq.service'
+import GeneratingState from '../components/ui/GeneratingState'
 import { saveGeneration, loadGeneration, updateGeneration } from '../lib/genStorage'
 import { awardXP, recordLastGen, resultMessage } from '../lib/gamification'
+import { useGenerationWS } from '../hooks/useGenerationWS'
+
+const MCQ_STAGES = [
+  { id: 'validating',      label: 'Validating parameters…' },
+  { id: 'cache_check',     label: 'Checking for cached questions…' },
+  { id: 'loading_context', label: 'Loading curriculum context…' },
+  { id: 'generating',      label: 'Crafting questions…' },
+  { id: 'saving',          label: 'Saving…' },
+]
 
 const DEFAULT_CONFIG = {
   subject: 'biology',
@@ -35,7 +43,6 @@ export default function MCQ() {
     topic: searchParams.get('topic') || DEFAULT_CONFIG.topic,
   }))
   const [questions, setQuestions] = useState([])
-  const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [selected, setSelected] = useState({})
   const [revealed, setRevealed] = useState({})
@@ -43,6 +50,9 @@ export default function MCQ() {
   const [hovered, setHovered] = useState(null) // { qi, letter }
   const [isRetake, setIsRetake] = useState(false) // retakes earn no XP
   const [xpEarned, setXpEarned] = useState(0)
+
+  const { connect, status: wsStatus, currentStageIndex, result: wsResult, error: wsError } = useGenerationWS('mcq')
+  const loading = wsStatus === 'connecting' || wsStatus === 'running'
 
   // Restore from localStorage when navigated from history
   useEffect(() => {
@@ -70,38 +80,41 @@ export default function MCQ() {
     setSearchParams({})
   }
 
-  async function handleGenerate() {
-    setLoading(true)
+  // Handle WS result
+  useEffect(() => {
+    if (!wsResult) return
+    const qs = wsResult.questions ?? []
+    const gid = wsResult.generation_id
+    setQuestions(qs)
+    setCurrentGenId(gid)
+    setIsRetake(false)
+    setXpEarned(0)
+    saveGeneration(gid, { type: 'mcq', questions: qs, config, selected: {}, revealed: {} })
+    setSearchParams({ gen: gid })
+    awardXP('gen_mcq', { subject: config.subject })
+    recordLastGen({ type: 'mcq', genId: gid, subject: config.subject, grade: config.grade, unit: config.unit, topic: config.topic })
+  }, [wsResult]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Propagate WS errors
+  useEffect(() => {
+    if (wsError) setError(wsError.detail ?? 'Generation failed.')
+  }, [wsError])
+
+  function handleGenerate() {
     setError(null)
     setSelected({})
     setRevealed({})
     setCurrentGenId(null)
-    try {
-      const res = await generateMCQ({
-        subject: config.subject,
-        grade: config.grade,
-        unit: config.unit,
-        topic: config.topic || null,
-        num_questions: config.numItems,
-        difficulty: config.difficulty,
-        note_id: fromNote || null,
-        chat_session_id: fromChat || null,
-      })
-      const qs = res.questions ?? []
-      const gid = res.generation_id
-      setQuestions(qs)
-      setCurrentGenId(gid)
-      setIsRetake(false)
-      setXpEarned(0)
-      saveGeneration(gid, { type: 'mcq', questions: qs, config, selected: {}, revealed: {} })
-      setSearchParams({ gen: gid })
-      awardXP('gen_mcq', { subject: config.subject })
-      recordLastGen({ type: 'mcq', genId: gid, subject: config.subject, grade: config.grade, unit: config.unit, topic: config.topic })
-    } catch (e) {
-      setError(e.message)
-    } finally {
-      setLoading(false)
-    }
+    connect({
+      subject: config.subject,
+      grade: config.grade,
+      unit: config.unit,
+      topic: config.topic || null,
+      num_questions: config.numItems,
+      difficulty: config.difficulty,
+      note_id: fromNote || null,
+      chat_session_id: fromChat || null,
+    })
   }
 
   function pick(qi, letter) {
@@ -207,9 +220,10 @@ export default function MCQ() {
         )}
 
         {loading && (
-          <LoadingState
-            title="Generating questions…"
-            sub="Claude is crafting curriculum-based questions — this takes 5–10 seconds."
+          <GeneratingState
+            stageDefs={MCQ_STAGES}
+            currentStageIndex={currentStageIndex}
+            status={wsStatus}
           />
         )}
 

@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
 
-from app.api.routes import auth, chat, evaluation, flashcards, history, mcq, notes
+from app.api.routes import auth, chat, evaluation, flashcards, history, mcq, notes, ws
 from app.config import settings
 from app.core.exceptions import OutOfContextError
 from app.db.database import Base, engine, get_db
@@ -114,6 +114,7 @@ app.include_router(notes.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(history.router, prefix="/api")
 app.include_router(evaluation.router, prefix="/api")
+app.include_router(ws.router, prefix="/api")
 
 
 @app.get("/health")

@@ -51,6 +51,9 @@ markers = [
     "integration: real DB, mocked external services",
     "e2e: full flow tests",
 ]
+filterwarnings = [
+    "ignore::starlette.testclient.StarletteDeprecationWarning",
+]
 
 [tool.coverage.run]
 source = ["app"]
