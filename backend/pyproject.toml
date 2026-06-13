@@ -1,7 +1,7 @@
 [project]
 name = "smartstudy"
 version = "0.1.0"
-description = "Add your description here"
+description = "AI-powered study companion for Ethiopian high school students — generates curriculum-aligned MCQs, flashcards, and notes with a real-time tutor chat"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
