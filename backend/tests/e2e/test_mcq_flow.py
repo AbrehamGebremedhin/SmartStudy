@@ -50,27 +50,27 @@ class TestMcqGenerationFlow:
             assert body1["questions"][0]["topic"] == "Newton's Laws"
             assert body1["difficulty"] == "medium"
 
-            # 4. Second identical request → cache hit
+            # 4. Second identical request: pool + fresh (no pure cache hit)
             resp2 = await client.post("/api/mcq/generate", json=MCQ_PAYLOAD)
             assert resp2.status_code == 200
             body2 = resp2.json()
-            assert body2["was_cache_hit"] is True
+            assert body2["was_cache_hit"] is False
 
-            # 5. Cache hit returns the same generation
-            assert body2["generation_id"] == gen_id_1
+            # 5. Second request creates its own generation
+            gen_id_2 = body2["generation_id"]
+            assert gen_id_2 != gen_id_1
 
-            # 6. Agent NOT called again
-            assert mock_agent.call_count == 1
+            # 6. Agent called again for fresh items
+            assert mock_agent.call_count == 2
 
-        # 7. History shows two entries (one fresh, one cache hit) linked to same generation
+        # 7. History shows two entries with distinct generations, both fresh
         rows = await crud.get_user_history(db_session, test_user.id, generation_type="mcq")
         assert len(rows) == 2
         gen_ids = {str(gen.id) for _, gen in rows}
-        assert gen_ids == {gen_id_1}
+        assert len(gen_ids) == 2
 
         cache_flags = {ug.was_cache_hit for ug, _ in rows}
-        assert True in cache_flags
-        assert False in cache_flags
+        assert cache_flags == {False}
 
     async def test_different_params_creates_separate_generation(
         self, client: AsyncClient, test_user, db_session: AsyncSession
@@ -101,7 +101,7 @@ class TestMcqGenerationFlow:
         assert gen.output_tokens == 1200
         assert gen.cost_usd > 0
 
-    async def test_two_users_share_cached_generation(
+    async def test_two_users_each_get_fresh_generation_from_shared_pool(
         self,
         client: AsyncClient,
         test_user,
@@ -119,9 +119,9 @@ class TestMcqGenerationFlow:
             "app.api.routes.mcq.run_generate_mcqs",
             AsyncMock(return_value=FIXTURE_MCQ_RESPONSE),
         ) as mock_agent:
-            # First user generates
+            # User1 generates → seeds the shared pool
             resp1 = await client.post("/api/mcq/generate", json=MCQ_PAYLOAD)
-            gen_id = resp1.json()["generation_id"]
+            gen_id_1 = resp1.json()["generation_id"]
             assert mock_agent.call_count == 1
 
             # Switch auth to user2 and make the same request
@@ -134,16 +134,17 @@ class TestMcqGenerationFlow:
             app.dependency_overrides[get_db] = _get_db2
             app.dependency_overrides[get_current_user] = _get_user2
 
+            # User2 always gets fresh generation (pool + fresh); no pure cache hit
             resp2 = await client.post("/api/mcq/generate", json=MCQ_PAYLOAD)
-            assert resp2.json()["was_cache_hit"] is True
-            assert resp2.json()["generation_id"] == gen_id
-            # Agent still only called once (cache hit for user2)
-            assert mock_agent.call_count == 1
+            assert resp2.json()["was_cache_hit"] is False
+            gen_id_2 = resp2.json()["generation_id"]
+            assert gen_id_2 != gen_id_1  # each user gets their own generation
+            assert mock_agent.call_count == 2  # agent called for user2 too
 
-        # Both users each have one history entry pointing to the same generation
+        # Each user has one history entry pointing to their own generation
         rows_u1 = await crud.get_user_history(db_session, test_user.id)
         rows_u2 = await crud.get_user_history(db_session, user2.id)
         assert len(rows_u1) == 1
         assert len(rows_u2) == 1
-        assert str(rows_u1[0][1].id) == gen_id
-        assert str(rows_u2[0][1].id) == gen_id
+        assert str(rows_u1[0][1].id) == gen_id_1
+        assert str(rows_u2[0][1].id) == gen_id_2

@@ -43,13 +43,13 @@ class TestFlashcardGenerationFlow:
             # 2. Agent called once
             assert mock_agent.call_count == 1
 
-            # 3. Cache hit on repeat
+            # 3. Second identical request: pool + fresh (no pure cache hit)
             resp2 = await client.post("/api/flashcards/generate", json=FC_PAYLOAD)
-            assert resp2.json()["was_cache_hit"] is True
-            assert resp2.json()["generation_id"] == gen_id
-            assert mock_agent.call_count == 1
+            assert resp2.json()["was_cache_hit"] is False
+            assert resp2.json()["generation_id"] != gen_id  # new generation saved
+            assert mock_agent.call_count == 2  # agent called again for fresh items
 
-        # 4. History reflects both entries
+        # 4. History reflects both entries (both fresh generations)
         rows = await crud.get_user_history(db_session, test_user.id, generation_type="flashcard")
         assert len(rows) == 2
 

@@ -49,10 +49,11 @@ class TestGenerateFlashcardsSuccess:
 
 @pytest.mark.integration
 class TestGenerateFlashcardsCache:
-    async def test_identical_request_is_cache_hit(self, client: AsyncClient, mock_run_generate_flashcards):
+    async def test_identical_request_always_generates_fresh(self, client: AsyncClient, mock_run_generate_flashcards):
         await client.post("/api/flashcards/generate", json=FC_PAYLOAD)
         resp2 = await client.post("/api/flashcards/generate", json=FC_PAYLOAD)
-        assert resp2.json()["was_cache_hit"] is True
+        # Generic requests always generate fresh — no pure cache hits
+        assert resp2.json()["was_cache_hit"] is False
 
     async def test_different_topic_misses_cache(self, client: AsyncClient, mock_run_generate_flashcards):
         await client.post("/api/flashcards/generate", json={**FC_PAYLOAD, "topic": "kinematics"})

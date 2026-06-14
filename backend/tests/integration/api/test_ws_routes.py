@@ -286,7 +286,7 @@ class TestWsGenerateMCQ:
 
         with (
             patch("app.api.routes.ws._auth_ws", AsyncMock(return_value=fake_user)),
-            patch("app.api.routes.ws.crud.get_cached_generation", AsyncMock(return_value=None)),
+            patch("app.api.routes.ws.crud.get_pooled_items", AsyncMock(return_value=[])),
             patch("app.api.routes.ws.crud.save_generation", AsyncMock(return_value=fake_gen)),
             patch("app.api.routes.ws.crud.link_user_generation", AsyncMock()),
             patch("app.api.routes.ws.run_generate_mcqs", AsyncMock(return_value=FIXTURE_MCQ_RESPONSE)),
@@ -309,7 +309,7 @@ class TestWsGenerateMCQ:
 
         with (
             patch("app.api.routes.ws._auth_ws", AsyncMock(return_value=fake_user)),
-            patch("app.api.routes.ws.crud.get_cached_generation", AsyncMock(return_value=None)),
+            patch("app.api.routes.ws.crud.get_pooled_items", AsyncMock(return_value=[])),
             patch("app.api.routes.ws.crud.save_generation", AsyncMock(return_value=fake_gen)),
             patch("app.api.routes.ws.crud.link_user_generation", AsyncMock()),
             patch("app.api.routes.ws.run_generate_mcqs", AsyncMock(return_value=FIXTURE_MCQ_RESPONSE)),
@@ -322,27 +322,29 @@ class TestWsGenerateMCQ:
         assert "questions" in result["data"]
         assert result["data"]["was_cache_hit"] is False
 
-    def test_cache_hit_returns_cached_questions(self, ws_app):
+    def test_result_is_always_freshly_generated(self, ws_app):
+        """Generic requests always generate fresh — no pure cache hits."""
         client, _ = ws_app
         fake_user = _fake_user()
-        cached_gen = _fake_generation({
+        fake_gen = _fake_generation({
             "questions": FIXTURE_MCQ_RESPONSE["questions"],
             "difficulty": "medium",
         })
 
         with (
             patch("app.api.routes.ws._auth_ws", AsyncMock(return_value=fake_user)),
-            patch("app.api.routes.ws.crud.get_cached_generation", AsyncMock(return_value=cached_gen)),
+            patch("app.api.routes.ws.crud.get_pooled_items", AsyncMock(return_value=[])),
+            patch("app.api.routes.ws.crud.save_generation", AsyncMock(return_value=fake_gen)),
             patch("app.api.routes.ws.crud.link_user_generation", AsyncMock()),
-            patch("app.api.routes.ws.run_generate_mcqs", AsyncMock()) as mock_gen,
+            patch("app.api.routes.ws.run_generate_mcqs", AsyncMock(return_value=FIXTURE_MCQ_RESPONSE)) as mock_gen,
         ):
             with client.websocket_connect("/api/ws/generate/mcq?token=test-token") as ws:
                 ws.send_json(MCQ_PAYLOAD)
                 msgs = _collect(ws)
 
-        mock_gen.assert_not_called()
+        mock_gen.assert_called_once()
         result = next(m for m in msgs if m["type"] == "result")
-        assert result["data"]["was_cache_hit"] is True
+        assert result["data"]["was_cache_hit"] is False
 
     def test_generating_stage_label_includes_count(self, ws_app):
         client, _ = ws_app
@@ -354,7 +356,7 @@ class TestWsGenerateMCQ:
 
         with (
             patch("app.api.routes.ws._auth_ws", AsyncMock(return_value=fake_user)),
-            patch("app.api.routes.ws.crud.get_cached_generation", AsyncMock(return_value=None)),
+            patch("app.api.routes.ws.crud.get_pooled_items", AsyncMock(return_value=[])),
             patch("app.api.routes.ws.crud.save_generation", AsyncMock(return_value=fake_gen)),
             patch("app.api.routes.ws.crud.link_user_generation", AsyncMock()),
             patch("app.api.routes.ws.run_generate_mcqs", AsyncMock(return_value=FIXTURE_MCQ_RESPONSE)),
@@ -364,7 +366,7 @@ class TestWsGenerateMCQ:
                 msgs = _collect(ws)
 
         gen_stage = next(m for m in msgs if m.get("stage") == "generating")
-        # MCQ_PAYLOAD has num_questions=2
+        # MCQ_PAYLOAD has num_questions=2, empty pool → fresh_count=2
         assert "2" in gen_stage["label"]
 
     def test_agent_error_sends_error_message(self, ws_app):
@@ -373,7 +375,7 @@ class TestWsGenerateMCQ:
 
         with (
             patch("app.api.routes.ws._auth_ws", AsyncMock(return_value=fake_user)),
-            patch("app.api.routes.ws.crud.get_cached_generation", AsyncMock(return_value=None)),
+            patch("app.api.routes.ws.crud.get_pooled_items", AsyncMock(return_value=[])),
             patch(
                 "app.api.routes.ws.run_generate_mcqs",
                 AsyncMock(return_value={"error": "No relevant documents found"}),
@@ -401,7 +403,7 @@ class TestWsGenerateFlashcards:
 
         with (
             patch("app.api.routes.ws._auth_ws", AsyncMock(return_value=fake_user)),
-            patch("app.api.routes.ws.crud.get_cached_generation", AsyncMock(return_value=None)),
+            patch("app.api.routes.ws.crud.get_pooled_items", AsyncMock(return_value=[])),
             patch("app.api.routes.ws.crud.save_generation", AsyncMock(return_value=fake_gen)),
             patch("app.api.routes.ws.crud.link_user_generation", AsyncMock()),
             patch("app.api.routes.ws.run_generate_flashcards", AsyncMock(return_value=FIXTURE_FLASHCARD_RESPONSE)),
@@ -424,7 +426,7 @@ class TestWsGenerateFlashcards:
 
         with (
             patch("app.api.routes.ws._auth_ws", AsyncMock(return_value=fake_user)),
-            patch("app.api.routes.ws.crud.get_cached_generation", AsyncMock(return_value=None)),
+            patch("app.api.routes.ws.crud.get_pooled_items", AsyncMock(return_value=[])),
             patch("app.api.routes.ws.crud.save_generation", AsyncMock(return_value=fake_gen)),
             patch("app.api.routes.ws.crud.link_user_generation", AsyncMock()),
             patch("app.api.routes.ws.run_generate_flashcards", AsyncMock(return_value=FIXTURE_FLASHCARD_RESPONSE)),
@@ -437,27 +439,29 @@ class TestWsGenerateFlashcards:
         assert "flashcards" in result["data"]
         assert "difficulty" in result["data"]
 
-    def test_cache_hit_returns_cached_flashcards(self, ws_app):
+    def test_result_is_always_freshly_generated(self, ws_app):
+        """Generic requests always generate fresh — no pure cache hits."""
         client, _ = ws_app
         fake_user = _fake_user()
-        cached_gen = _fake_generation({
+        fake_gen = _fake_generation({
             "flashcards": FIXTURE_FLASHCARD_RESPONSE["flashcards"],
             "difficulty": "medium",
         })
 
         with (
             patch("app.api.routes.ws._auth_ws", AsyncMock(return_value=fake_user)),
-            patch("app.api.routes.ws.crud.get_cached_generation", AsyncMock(return_value=cached_gen)),
+            patch("app.api.routes.ws.crud.get_pooled_items", AsyncMock(return_value=[])),
+            patch("app.api.routes.ws.crud.save_generation", AsyncMock(return_value=fake_gen)),
             patch("app.api.routes.ws.crud.link_user_generation", AsyncMock()),
-            patch("app.api.routes.ws.run_generate_flashcards", AsyncMock()) as mock_gen,
+            patch("app.api.routes.ws.run_generate_flashcards", AsyncMock(return_value=FIXTURE_FLASHCARD_RESPONSE)) as mock_gen,
         ):
             with client.websocket_connect("/api/ws/generate/flashcards?token=test-token") as ws:
                 ws.send_json(FLASHCARD_PAYLOAD)
                 msgs = _collect(ws)
 
-        mock_gen.assert_not_called()
+        mock_gen.assert_called_once()
         result = next(m for m in msgs if m["type"] == "result")
-        assert result["data"]["was_cache_hit"] is True
+        assert result["data"]["was_cache_hit"] is False
 
     def test_generating_stage_label_includes_count(self, ws_app):
         client, _ = ws_app
@@ -469,7 +473,7 @@ class TestWsGenerateFlashcards:
 
         with (
             patch("app.api.routes.ws._auth_ws", AsyncMock(return_value=fake_user)),
-            patch("app.api.routes.ws.crud.get_cached_generation", AsyncMock(return_value=None)),
+            patch("app.api.routes.ws.crud.get_pooled_items", AsyncMock(return_value=[])),
             patch("app.api.routes.ws.crud.save_generation", AsyncMock(return_value=fake_gen)),
             patch("app.api.routes.ws.crud.link_user_generation", AsyncMock()),
             patch("app.api.routes.ws.run_generate_flashcards", AsyncMock(return_value=FIXTURE_FLASHCARD_RESPONSE)),
@@ -479,7 +483,7 @@ class TestWsGenerateFlashcards:
                 msgs = _collect(ws)
 
         gen_stage = next(m for m in msgs if m.get("stage") == "generating")
-        # FLASHCARD_PAYLOAD has num_cards=2
+        # FLASHCARD_PAYLOAD has num_cards=2, empty pool → fresh_count=2
         assert "2" in gen_stage["label"]
 
     def test_auth_failure_closes_connection(self, ws_app):

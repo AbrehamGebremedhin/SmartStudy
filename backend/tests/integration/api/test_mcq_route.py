@@ -65,20 +65,21 @@ class TestGenerateMcqSuccess:
 
 @pytest.mark.integration
 class TestGenerateMcqCache:
-    async def test_second_identical_request_is_cache_hit(
+    async def test_second_identical_request_always_generates_fresh(
         self, client: AsyncClient, mock_run_generate_mcqs
     ):
         await client.post("/api/mcq/generate", json=MCQ_PAYLOAD)
         resp2 = await client.post("/api/mcq/generate", json=MCQ_PAYLOAD)
-        assert resp2.json()["was_cache_hit"] is True
+        # Generic requests always generate fresh — no pure cache hits
+        assert resp2.json()["was_cache_hit"] is False
 
-    async def test_cache_hit_does_not_call_agent_again(
+    async def test_each_request_calls_agent(
         self, client: AsyncClient, mock_run_generate_mcqs
     ):
         await client.post("/api/mcq/generate", json=MCQ_PAYLOAD)
         await client.post("/api/mcq/generate", json=MCQ_PAYLOAD)
-        # Agent should only be called once (first request)
-        assert mock_run_generate_mcqs.call_count == 1
+        # Agent called on every request since fresh items are always generated
+        assert mock_run_generate_mcqs.call_count == 2
 
     async def test_different_params_call_agent_twice(
         self, client: AsyncClient, mock_run_generate_mcqs
@@ -154,10 +155,11 @@ class TestGenerateMcqTopic:
         resp = await client.post("/api/mcq/generate", json=payload)
         assert resp.status_code == 200
 
-    async def test_same_topic_request_is_cache_hit(self, client: AsyncClient, mock_run_generate_mcqs):
+    async def test_same_topic_request_always_generates_fresh(self, client: AsyncClient, mock_run_generate_mcqs):
         await client.post("/api/mcq/generate", json=MCQ_TOPIC_PAYLOAD)
         resp2 = await client.post("/api/mcq/generate", json=MCQ_TOPIC_PAYLOAD)
-        assert resp2.json()["was_cache_hit"] is True
+        # Generic requests always generate fresh — no pure cache hits
+        assert resp2.json()["was_cache_hit"] is False
 
     async def test_different_topics_are_separate_cache_entries(self, client: AsyncClient, mock_run_generate_mcqs):
         await client.post("/api/mcq/generate", json=MCQ_TOPIC_PAYLOAD)

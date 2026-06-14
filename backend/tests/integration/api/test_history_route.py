@@ -89,15 +89,15 @@ class TestGetHistory:
         assert "was_cache_hit" in item
         assert "accessed_at" in item
 
-    async def test_cache_hit_marked_correctly_in_history(self, client: AsyncClient, mock_agents):
+    async def test_was_cache_hit_recorded_in_history(self, client: AsyncClient, mock_agents):
         payload = {"subject": "physics", "grade": 11, "num_questions": 1, "difficulty": "medium"}
         await client.post("/api/mcq/generate", json=payload)
-        await client.post("/api/mcq/generate", json=payload)  # cache hit
+        await client.post("/api/mcq/generate", json=payload)
         items = (await client.get("/api/history/mcq")).json()
-        # Sort by accessed_at; second item should be cache hit
+        # Generic requests always generate fresh; both entries are was_cache_hit=False
         cache_flags = [i["was_cache_hit"] for i in items]
-        assert False in cache_flags
-        assert True in cache_flags
+        assert len(cache_flags) == 2
+        assert all(f is False for f in cache_flags)
 
     async def test_unauthenticated_returns_401_or_403(self, unauth_client: AsyncClient):
         resp = await unauth_client.get("/api/history/mcq")
