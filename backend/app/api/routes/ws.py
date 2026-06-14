@@ -1,3 +1,5 @@
+import math
+import random
 import uuid
 
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
@@ -9,7 +11,7 @@ from app.core.exceptions import OutOfContextError
 from app.db import crud
 from app.db.database import get_db
 from app.schemas.requests import FlashcardRequest, MCQRequest, NotesRequest
-from app.services.cache import _parse_token_usage, compute_request_hash
+from app.services.cache import POOL_FRESH_RATIO, _parse_token_usage, compute_request_hash
 from app.services.generation import run_generate_flashcards, run_generate_mcqs, run_generate_notes
 
 router = APIRouter(prefix="/ws", tags=["WebSocket"])
@@ -190,68 +192,122 @@ async def ws_generate_mcq(
         await websocket.send_json(_prog("validating", 0, TOTAL, "Validating parameters…"))
         validate_curriculum_params(body.subject, body.grade, body.unit)
 
-        params = {
-            "subject": body.subject,
-            "grade": body.grade,
-            "unit": body.unit,
-            "topic": body.topic,
-            "note_id": str(body.note_id) if body.note_id else None,
-            "chat_session_id": str(body.chat_session_id) if body.chat_session_id else None,
-            "num_questions": body.num_questions,
-            "difficulty": body.difficulty,
-        }
-        request_hash = compute_request_hash(params)
+        # Contextual (note/chat grounded): exact-hash caching, items must not mix with pool
+        if body.note_id or body.chat_session_id:
+            params = {
+                "subject": body.subject,
+                "grade": body.grade,
+                "unit": body.unit,
+                "topic": body.topic,
+                "note_id": str(body.note_id) if body.note_id else None,
+                "chat_session_id": str(body.chat_session_id) if body.chat_session_id else None,
+                "num_questions": body.num_questions,
+                "difficulty": body.difficulty,
+            }
+            request_hash = compute_request_hash(params)
 
-        await websocket.send_json(_prog("cache_check", 1, TOTAL, "Checking for cached questions…"))
-        cached = await crud.get_cached_generation(db, request_hash, "mcq")
-        if cached:
-            await crud.link_user_generation(db, user.id, cached.id, was_cache_hit=True)
+            await websocket.send_json(_prog("cache_check", 1, TOTAL, "Checking for cached questions…"))
+            cached = await crud.get_cached_generation(db, request_hash, "mcq")
+            if cached:
+                await crud.link_user_generation(db, user.id, cached.id, was_cache_hit=True)
+                await db.commit()
+                await websocket.send_json({
+                    "type": "result",
+                    "data": {
+                        "generation_id": str(cached.id),
+                        "was_cache_hit": True,
+                        "questions": cached.content["questions"],
+                        "difficulty": cached.content.get("difficulty", body.difficulty),
+                    },
+                })
+                await websocket.close()
+                return
+
+            await websocket.send_json(_prog("loading_context", 2, TOTAL, "Loading curriculum context…"))
+            note_content: dict | None = None
+            chat_context: str | None = None
+            if body.note_id:
+                note_gen = await crud.get_generation_for_user(db, user.id, body.note_id, "notes")
+                if not note_gen:
+                    await websocket.send_json({"type": "error", "code": "not_found", "detail": "Note not found."})
+                    await websocket.close()
+                    return
+                note_content = note_gen.content.get("notes")
+            if body.chat_session_id:
+                chat_session = await crud.get_chat_session_with_messages(db, body.chat_session_id, user.id)
+                if not chat_session:
+                    await websocket.send_json({"type": "error", "code": "not_found", "detail": "Chat session not found."})
+                    await websocket.close()
+                    return
+                chat_context = _format_chat_context(chat_session.messages)
+
+            n = body.num_questions
+            await websocket.send_json(_prog("generating", 3, TOTAL, f"Crafting {n} question{'s' if n != 1 else ''}…"))
+            result = await run_generate_mcqs(
+                subject=body.subject, grade=body.grade, unit=body.unit, topic=body.topic,
+                num_questions=body.num_questions, difficulty=body.difficulty,
+                note_content=note_content, chat_context=chat_context,
+            )
+            if result.get("error"):
+                await websocket.send_json({"type": "error", "code": result["error"], "detail": str(result["error"])})
+                await websocket.close()
+                return
+
+            await websocket.send_json(_prog("saving", 4, TOTAL, "Saving…"))
+            input_tokens, output_tokens, cost_usd = _parse_token_usage(result.get("token_usage"))
+            generation = await crud.save_generation(
+                db, generation_type="mcq", request_hash=request_hash, request_params=params,
+                content={"questions": result["questions"], "difficulty": result.get("difficulty", body.difficulty)},
+                input_tokens=input_tokens, output_tokens=output_tokens, cost_usd=cost_usd,
+            )
+            await crud.link_user_generation(db, user.id, generation.id, was_cache_hit=False)
             await db.commit()
             await websocket.send_json({
                 "type": "result",
                 "data": {
-                    "generation_id": str(cached.id),
-                    "was_cache_hit": True,
-                    "questions": cached.content["questions"],
-                    "difficulty": cached.content.get("difficulty", body.difficulty),
+                    "generation_id": str(generation.id),
+                    "was_cache_hit": False,
+                    "questions": result["questions"],
+                    "difficulty": result.get("difficulty", body.difficulty),
+                    "token_usage": result.get("token_usage"),
                 },
             })
             await websocket.close()
             return
 
-        await websocket.send_json(_prog("loading_context", 2, TOTAL, "Loading curriculum context…"))
-        note_content: dict | None = None
-        chat_context: str | None = None
+        # Generic: pool existing + always generate POOL_FRESH_RATIO fresh
+        topic_params = {
+            "subject": body.subject,
+            "grade": body.grade,
+            "unit": body.unit,
+            "topic": body.topic,
+            "difficulty": body.difficulty,
+        }
+        topic_hash = compute_request_hash(topic_params)
 
-        if body.note_id:
-            note_gen = await crud.get_generation_for_user(db, user.id, body.note_id, "notes")
-            if not note_gen:
-                await websocket.send_json({"type": "error", "code": "not_found", "detail": "Note not found."})
-                await websocket.close()
-                return
-            note_content = note_gen.content.get("notes")
+        await websocket.send_json(_prog("cache_check", 1, TOTAL, "Checking question pool…"))
+        pool = await crud.get_pooled_items(db, topic_hash, "mcq", "questions")
 
-        if body.chat_session_id:
-            chat_session = await crud.get_chat_session_with_messages(db, body.chat_session_id, user.id)
-            if not chat_session:
-                await websocket.send_json({"type": "error", "code": "not_found", "detail": "Chat session not found."})
-                await websocket.close()
-                return
-            chat_context = _format_chat_context(chat_session.messages)
+        seen: set[str] = set()
+        unique_pool: list = []
+        for q in pool:
+            k = q.get("question", "")
+            if k not in seen:
+                seen.add(k)
+                unique_pool.append(q)
 
-        n = body.num_questions
-        await websocket.send_json(_prog("generating", 3, TOTAL, f"Crafting {n} question{'s' if n != 1 else ''}…"))
+        max_reuse = math.floor(body.num_questions * (1 - POOL_FRESH_RATIO))
+        reuse_count = min(max_reuse, len(unique_pool))
+        fresh_count = body.num_questions - reuse_count
+
+        await websocket.send_json(_prog("loading_context", 2, TOTAL, "Preparing generation…"))
+        n = fresh_count
+        await websocket.send_json(_prog("generating", 3, TOTAL, f"Crafting {n} new question{'s' if n != 1 else ''}…"))
         result = await run_generate_mcqs(
-            subject=body.subject,
-            grade=body.grade,
-            unit=body.unit,
-            topic=body.topic,
-            num_questions=body.num_questions,
-            difficulty=body.difficulty,
-            note_content=note_content,
-            chat_context=chat_context,
+            subject=body.subject, grade=body.grade, unit=body.unit, topic=body.topic,
+            num_questions=fresh_count, difficulty=body.difficulty,
+            note_content=None, chat_context=None,
         )
-
         if result.get("error"):
             await websocket.send_json({"type": "error", "code": result["error"], "detail": str(result["error"])})
             await websocket.close()
@@ -260,24 +316,23 @@ async def ws_generate_mcq(
         await websocket.send_json(_prog("saving", 4, TOTAL, "Saving…"))
         input_tokens, output_tokens, cost_usd = _parse_token_usage(result.get("token_usage"))
         generation = await crud.save_generation(
-            db,
-            generation_type="mcq",
-            request_hash=request_hash,
-            request_params=params,
+            db, generation_type="mcq", request_hash=topic_hash, request_params=topic_params,
             content={"questions": result["questions"], "difficulty": result.get("difficulty", body.difficulty)},
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            cost_usd=cost_usd,
+            input_tokens=input_tokens, output_tokens=output_tokens, cost_usd=cost_usd,
         )
         await crud.link_user_generation(db, user.id, generation.id, was_cache_hit=False)
         await db.commit()
+
+        reused = random.sample(unique_pool, reuse_count) if reuse_count > 0 else []
+        all_questions = result["questions"] + reused
+        random.shuffle(all_questions)
 
         await websocket.send_json({
             "type": "result",
             "data": {
                 "generation_id": str(generation.id),
                 "was_cache_hit": False,
-                "questions": result["questions"],
+                "questions": all_questions,
                 "difficulty": result.get("difficulty", body.difficulty),
                 "token_usage": result.get("token_usage"),
             },
@@ -320,68 +375,122 @@ async def ws_generate_flashcards(
         await websocket.send_json(_prog("validating", 0, TOTAL, "Validating parameters…"))
         validate_curriculum_params(body.subject, body.grade, body.unit)
 
-        params = {
-            "subject": body.subject,
-            "grade": body.grade,
-            "unit": body.unit,
-            "topic": body.topic,
-            "note_id": str(body.note_id) if body.note_id else None,
-            "chat_session_id": str(body.chat_session_id) if body.chat_session_id else None,
-            "num_cards": body.num_cards,
-            "difficulty": body.difficulty,
-        }
-        request_hash = compute_request_hash(params)
+        # Contextual (note/chat grounded): exact-hash caching, items must not mix with pool
+        if body.note_id or body.chat_session_id:
+            params = {
+                "subject": body.subject,
+                "grade": body.grade,
+                "unit": body.unit,
+                "topic": body.topic,
+                "note_id": str(body.note_id) if body.note_id else None,
+                "chat_session_id": str(body.chat_session_id) if body.chat_session_id else None,
+                "num_cards": body.num_cards,
+                "difficulty": body.difficulty,
+            }
+            request_hash = compute_request_hash(params)
 
-        await websocket.send_json(_prog("cache_check", 1, TOTAL, "Checking for cached flashcards…"))
-        cached = await crud.get_cached_generation(db, request_hash, "flashcard")
-        if cached:
-            await crud.link_user_generation(db, user.id, cached.id, was_cache_hit=True)
+            await websocket.send_json(_prog("cache_check", 1, TOTAL, "Checking for cached flashcards…"))
+            cached = await crud.get_cached_generation(db, request_hash, "flashcard")
+            if cached:
+                await crud.link_user_generation(db, user.id, cached.id, was_cache_hit=True)
+                await db.commit()
+                await websocket.send_json({
+                    "type": "result",
+                    "data": {
+                        "generation_id": str(cached.id),
+                        "was_cache_hit": True,
+                        "flashcards": cached.content["flashcards"],
+                        "difficulty": cached.content.get("difficulty", body.difficulty),
+                    },
+                })
+                await websocket.close()
+                return
+
+            await websocket.send_json(_prog("loading_context", 2, TOTAL, "Loading curriculum context…"))
+            note_content: dict | None = None
+            chat_context: str | None = None
+            if body.note_id:
+                note_gen = await crud.get_generation_for_user(db, user.id, body.note_id, "notes")
+                if not note_gen:
+                    await websocket.send_json({"type": "error", "code": "not_found", "detail": "Note not found."})
+                    await websocket.close()
+                    return
+                note_content = note_gen.content.get("notes")
+            if body.chat_session_id:
+                chat_session = await crud.get_chat_session_with_messages(db, body.chat_session_id, user.id)
+                if not chat_session:
+                    await websocket.send_json({"type": "error", "code": "not_found", "detail": "Chat session not found."})
+                    await websocket.close()
+                    return
+                chat_context = _format_chat_context(chat_session.messages)
+
+            n = body.num_cards
+            await websocket.send_json(_prog("generating", 3, TOTAL, f"Creating {n} flashcard{'s' if n != 1 else ''}…"))
+            result = await run_generate_flashcards(
+                subject=body.subject, grade=body.grade, unit=body.unit, topic=body.topic,
+                num_cards=body.num_cards, difficulty=body.difficulty,
+                note_content=note_content, chat_context=chat_context,
+            )
+            if result.get("error"):
+                await websocket.send_json({"type": "error", "code": result["error"], "detail": str(result["error"])})
+                await websocket.close()
+                return
+
+            await websocket.send_json(_prog("saving", 4, TOTAL, "Saving…"))
+            input_tokens, output_tokens, cost_usd = _parse_token_usage(result.get("token_usage"))
+            generation = await crud.save_generation(
+                db, generation_type="flashcard", request_hash=request_hash, request_params=params,
+                content={"flashcards": result["flashcards"], "difficulty": result.get("difficulty", body.difficulty)},
+                input_tokens=input_tokens, output_tokens=output_tokens, cost_usd=cost_usd,
+            )
+            await crud.link_user_generation(db, user.id, generation.id, was_cache_hit=False)
             await db.commit()
             await websocket.send_json({
                 "type": "result",
                 "data": {
-                    "generation_id": str(cached.id),
-                    "was_cache_hit": True,
-                    "flashcards": cached.content["flashcards"],
-                    "difficulty": cached.content.get("difficulty", body.difficulty),
+                    "generation_id": str(generation.id),
+                    "was_cache_hit": False,
+                    "flashcards": result["flashcards"],
+                    "difficulty": result.get("difficulty", body.difficulty),
+                    "token_usage": result.get("token_usage"),
                 },
             })
             await websocket.close()
             return
 
-        await websocket.send_json(_prog("loading_context", 2, TOTAL, "Loading curriculum context…"))
-        note_content: dict | None = None
-        chat_context: str | None = None
+        # Generic: pool existing + always generate POOL_FRESH_RATIO fresh
+        topic_params = {
+            "subject": body.subject,
+            "grade": body.grade,
+            "unit": body.unit,
+            "topic": body.topic,
+            "difficulty": body.difficulty,
+        }
+        topic_hash = compute_request_hash(topic_params)
 
-        if body.note_id:
-            note_gen = await crud.get_generation_for_user(db, user.id, body.note_id, "notes")
-            if not note_gen:
-                await websocket.send_json({"type": "error", "code": "not_found", "detail": "Note not found."})
-                await websocket.close()
-                return
-            note_content = note_gen.content.get("notes")
+        await websocket.send_json(_prog("cache_check", 1, TOTAL, "Checking flashcard pool…"))
+        pool = await crud.get_pooled_items(db, topic_hash, "flashcard", "flashcards")
 
-        if body.chat_session_id:
-            chat_session = await crud.get_chat_session_with_messages(db, body.chat_session_id, user.id)
-            if not chat_session:
-                await websocket.send_json({"type": "error", "code": "not_found", "detail": "Chat session not found."})
-                await websocket.close()
-                return
-            chat_context = _format_chat_context(chat_session.messages)
+        seen: set[str] = set()
+        unique_pool: list = []
+        for card in pool:
+            k = card.get("front", "")
+            if k not in seen:
+                seen.add(k)
+                unique_pool.append(card)
 
-        n = body.num_cards
-        await websocket.send_json(_prog("generating", 3, TOTAL, f"Creating {n} flashcard{'s' if n != 1 else ''}…"))
+        max_reuse = math.floor(body.num_cards * (1 - POOL_FRESH_RATIO))
+        reuse_count = min(max_reuse, len(unique_pool))
+        fresh_count = body.num_cards - reuse_count
+
+        await websocket.send_json(_prog("loading_context", 2, TOTAL, "Preparing generation…"))
+        n = fresh_count
+        await websocket.send_json(_prog("generating", 3, TOTAL, f"Creating {n} new flashcard{'s' if n != 1 else ''}…"))
         result = await run_generate_flashcards(
-            subject=body.subject,
-            grade=body.grade,
-            unit=body.unit,
-            topic=body.topic,
-            num_cards=body.num_cards,
-            difficulty=body.difficulty,
-            note_content=note_content,
-            chat_context=chat_context,
+            subject=body.subject, grade=body.grade, unit=body.unit, topic=body.topic,
+            num_cards=fresh_count, difficulty=body.difficulty,
+            note_content=None, chat_context=None,
         )
-
         if result.get("error"):
             await websocket.send_json({"type": "error", "code": result["error"], "detail": str(result["error"])})
             await websocket.close()
@@ -390,24 +499,23 @@ async def ws_generate_flashcards(
         await websocket.send_json(_prog("saving", 4, TOTAL, "Saving…"))
         input_tokens, output_tokens, cost_usd = _parse_token_usage(result.get("token_usage"))
         generation = await crud.save_generation(
-            db,
-            generation_type="flashcard",
-            request_hash=request_hash,
-            request_params=params,
+            db, generation_type="flashcard", request_hash=topic_hash, request_params=topic_params,
             content={"flashcards": result["flashcards"], "difficulty": result.get("difficulty", body.difficulty)},
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            cost_usd=cost_usd,
+            input_tokens=input_tokens, output_tokens=output_tokens, cost_usd=cost_usd,
         )
         await crud.link_user_generation(db, user.id, generation.id, was_cache_hit=False)
         await db.commit()
+
+        reused = random.sample(unique_pool, reuse_count) if reuse_count > 0 else []
+        all_cards = result["flashcards"] + reused
+        random.shuffle(all_cards)
 
         await websocket.send_json({
             "type": "result",
             "data": {
                 "generation_id": str(generation.id),
                 "was_cache_hit": False,
-                "flashcards": result["flashcards"],
+                "flashcards": all_cards,
                 "difficulty": result.get("difficulty", body.difficulty),
                 "token_usage": result.get("token_usage"),
             },

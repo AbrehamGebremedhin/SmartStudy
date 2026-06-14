@@ -2,6 +2,10 @@ import hashlib
 import json
 import re
 
+# Fraction of items that are always freshly generated when a pool exists.
+# The remainder (1 - POOL_FRESH_RATIO) is sampled from previous generations.
+POOL_FRESH_RATIO = 0.65
+
 
 def _parse_token_usage(token_usage_str: str | None) -> tuple[int, int, float]:
     """Extract (input_tokens, output_tokens, cost_usd) from agent token_usage string."""

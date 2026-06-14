@@ -1,3 +1,6 @@
+import math
+import random
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,7 +12,7 @@ from app.db.models import User
 from app.schemas.requests import FlashcardRequest
 from app.schemas.responses import FlashcardResponse
 from app.security.rate_limiter import limiter
-from app.services.cache import _parse_token_usage, compute_request_hash
+from app.services.cache import POOL_FRESH_RATIO, _parse_token_usage, compute_request_hash
 from app.services.generation import run_generate_flashcards
 
 
@@ -48,79 +51,114 @@ async def generate_flashcards(
 ) -> FlashcardResponse:
     validate_curriculum_params(body.subject, body.grade, body.unit)
 
-    # Hash uses IDs only (not content), so compute it before any DB calls.
-    params = {
+    # Contextual requests (note/chat grounded) keep exact-hash caching — items
+    # are anchored to specific source material and shouldn't mix with the pool.
+    if body.note_id or body.chat_session_id:
+        params = {
+            "subject": body.subject,
+            "grade": body.grade,
+            "unit": body.unit,
+            "topic": body.topic,
+            "note_id": str(body.note_id) if body.note_id else None,
+            "chat_session_id": str(body.chat_session_id) if body.chat_session_id else None,
+            "num_cards": body.num_cards,
+            "difficulty": body.difficulty,
+        }
+        request_hash = compute_request_hash(params)
+        cached = await crud.get_cached_generation(db, request_hash, "flashcard")
+        if cached:
+            background_tasks.add_task(_record_cache_hit, db, current_user.id, cached.id)
+            return FlashcardResponse(
+                generation_id=cached.id,
+                was_cache_hit=True,
+                flashcards=cached.content["flashcards"],
+                difficulty=cached.content.get("difficulty", body.difficulty),
+            )
+        note_content: dict | None = None
+        chat_context: str | None = None
+        if body.note_id:
+            note_gen = await crud.get_generation_for_user(db, current_user.id, body.note_id, "notes")
+            if not note_gen:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found.")
+            note_content = note_gen.content.get("notes")
+        if body.chat_session_id:
+            chat_session = await crud.get_chat_session_with_messages(db, body.chat_session_id, current_user.id)
+            if not chat_session:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat session not found.")
+            chat_context = _format_chat_context(chat_session.messages)
+        result = await run_generate_flashcards(
+            subject=body.subject, grade=body.grade, unit=body.unit, topic=body.topic,
+            num_cards=body.num_cards, difficulty=body.difficulty,
+            note_content=note_content, chat_context=chat_context,
+        )
+        if result.get("error"):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=result["error"])
+        input_tokens, output_tokens, cost_usd = _parse_token_usage(result.get("token_usage"))
+        generation = await crud.save_generation(
+            db, generation_type="flashcard", request_hash=request_hash, request_params=params,
+            content={"flashcards": result["flashcards"], "difficulty": result.get("difficulty", body.difficulty)},
+            input_tokens=input_tokens, output_tokens=output_tokens, cost_usd=cost_usd,
+        )
+        await crud.link_user_generation(db, current_user.id, generation.id, was_cache_hit=False)
+        await db.commit()
+        return FlashcardResponse(
+            generation_id=generation.id, was_cache_hit=False,
+            flashcards=result["flashcards"], difficulty=result.get("difficulty", body.difficulty),
+            token_usage=result.get("token_usage"),
+        )
+
+    # Generic (no context): pool existing items + always generate POOL_FRESH_RATIO fresh.
+    # Each call adds new items to the shared pool so variety grows over time.
+    topic_params = {
         "subject": body.subject,
         "grade": body.grade,
         "unit": body.unit,
         "topic": body.topic,
-        "note_id": str(body.note_id) if body.note_id else None,
-        "chat_session_id": str(body.chat_session_id) if body.chat_session_id else None,
-        "num_cards": body.num_cards,
         "difficulty": body.difficulty,
     }
-    request_hash = compute_request_hash(params)
+    topic_hash = compute_request_hash(topic_params)
 
-    # Check cache before loading note/chat content — skips a DB round-trip on hits.
-    cached = await crud.get_cached_generation(db, request_hash, "flashcard")
-    if cached:
-        background_tasks.add_task(_record_cache_hit, db, current_user.id, cached.id)
-        return FlashcardResponse(
-            generation_id=cached.id,
-            was_cache_hit=True,
-            flashcards=cached.content["flashcards"],
-            difficulty=cached.content.get("difficulty", body.difficulty),
-        )
+    pool = await crud.get_pooled_items(db, topic_hash, "flashcard", "flashcards")
 
-    # Cache miss — load note/chat context only now that we know generation is needed.
-    note_content: dict | None = None
-    chat_context: str | None = None
+    # Deduplicate pool by front-side text
+    seen: set[str] = set()
+    unique_pool: list = []
+    for card in pool:
+        k = card.get("front", "")
+        if k not in seen:
+            seen.add(k)
+            unique_pool.append(card)
 
-    if body.note_id:
-        note_gen = await crud.get_generation_for_user(db, current_user.id, body.note_id, "notes")
-        if not note_gen:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found.")
-        note_content = note_gen.content.get("notes")
-
-    if body.chat_session_id:
-        chat_session = await crud.get_chat_session_with_messages(db, body.chat_session_id, current_user.id)
-        if not chat_session:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat session not found.")
-        chat_context = _format_chat_context(chat_session.messages)
+    # At most (1 - POOL_FRESH_RATIO) of the requested count comes from the pool
+    max_reuse = math.floor(body.num_cards * (1 - POOL_FRESH_RATIO))
+    reuse_count = min(max_reuse, len(unique_pool))
+    fresh_count = body.num_cards - reuse_count
 
     result = await run_generate_flashcards(
-        subject=body.subject,
-        grade=body.grade,
-        unit=body.unit,
-        topic=body.topic,
-        num_cards=body.num_cards,
-        difficulty=body.difficulty,
-        note_content=note_content,
-        chat_context=chat_context,
+        subject=body.subject, grade=body.grade, unit=body.unit, topic=body.topic,
+        num_cards=fresh_count, difficulty=body.difficulty,
+        note_content=None, chat_context=None,
     )
-
     if result.get("error"):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=result["error"])
 
     input_tokens, output_tokens, cost_usd = _parse_token_usage(result.get("token_usage"))
-
     generation = await crud.save_generation(
-        db,
-        generation_type="flashcard",
-        request_hash=request_hash,
-        request_params=params,
+        db, generation_type="flashcard", request_hash=topic_hash, request_params=topic_params,
         content={"flashcards": result["flashcards"], "difficulty": result.get("difficulty", body.difficulty)},
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        cost_usd=cost_usd,
+        input_tokens=input_tokens, output_tokens=output_tokens, cost_usd=cost_usd,
     )
     await crud.link_user_generation(db, current_user.id, generation.id, was_cache_hit=False)
     await db.commit()
 
+    reused = random.sample(unique_pool, reuse_count) if reuse_count > 0 else []
+    all_cards = result["flashcards"] + reused
+    random.shuffle(all_cards)
+
     return FlashcardResponse(
         generation_id=generation.id,
         was_cache_hit=False,
-        flashcards=result["flashcards"],
+        flashcards=all_cards,
         difficulty=result.get("difficulty", body.difficulty),
         token_usage=result.get("token_usage"),
     )

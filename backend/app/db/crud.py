@@ -49,6 +49,23 @@ async def get_cached_generation(
     return result.scalar_one_or_none()
 
 
+async def get_pooled_items(
+    db: AsyncSession,
+    topic_hash: str,
+    generation_type: str,
+    item_key: str,
+) -> list:
+    """Return all items from every generation sharing the given topic hash."""
+    result = await db.execute(
+        select(Generation)
+        .where(Generation.request_hash == topic_hash, Generation.type == generation_type)
+    )
+    items = []
+    for gen in result.scalars().all():
+        items.extend(gen.content.get(item_key, []))
+    return items
+
+
 async def save_generation(
     db: AsyncSession,
     generation_type: str,
