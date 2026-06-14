@@ -116,10 +116,11 @@ export default function Flashcards() {
   function handleGenerate() {
     setError(null)
     resetDeckState()
+    const isSAT = config.subject === 'sat'
     connect({
       subject: config.subject,
-      grade: config.grade,
-      unit: config.unit,
+      grade: isSAT ? null : config.grade,
+      unit: isSAT ? null : config.unit,
       topic: config.topic || null,
       num_cards: config.numItems,
       difficulty: config.difficulty,

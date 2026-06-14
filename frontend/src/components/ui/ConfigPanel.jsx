@@ -32,6 +32,7 @@ export default function ConfigPanel({
   generateLabel = 'Generate',
 }) {
   const { subject, grade, unit, difficulty, numItems, topic } = config
+  const isCrossGrade = subject === 'sat'
   const maxUnits = getUnitCount(grade, subject)
   const subjects = ALL_SUBJECTS.filter(s => !excludeSubjects.includes(s.id))
 
@@ -57,16 +58,18 @@ export default function ConfigPanel({
           </select>
         </div>
 
-        <div className="cfg-f">
-          <label className="cfg-lbl">Grade</label>
-          <select value={grade} onChange={handleGradeChange}>
-            {GRADES.map(g => (
-              <option key={g} value={g}>Grade {g}</option>
-            ))}
-          </select>
-        </div>
+        {!isCrossGrade && (
+          <div className="cfg-f">
+            <label className="cfg-lbl">Grade</label>
+            <select value={grade} onChange={handleGradeChange}>
+              {GRADES.map(g => (
+                <option key={g} value={g}>Grade {g}</option>
+              ))}
+            </select>
+          </div>
+        )}
 
-        {showUnit && (
+        {showUnit && !isCrossGrade && (
           <div className="cfg-f">
             <label className="cfg-lbl">Unit (1–{maxUnits})</label>
             <select value={unit} onChange={e => onChange('unit', e.target.value)}>

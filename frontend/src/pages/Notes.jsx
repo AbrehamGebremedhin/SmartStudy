@@ -99,11 +99,12 @@ export default function Notes() {
       return
     }
     setError(null)
+    const isSAT = config.subject === 'sat'
     connect({
       subject: config.subject,
       topic: config.topic,
-      grade: config.grade,
-      unit: config.unit,
+      grade: isSAT ? null : config.grade,
+      unit: isSAT ? null : config.unit,
       chat_session_id: fromChat || null,
     })
   }

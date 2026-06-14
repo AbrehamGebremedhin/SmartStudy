@@ -105,10 +105,11 @@ export default function MCQ() {
     setSelected({})
     setRevealed({})
     setCurrentGenId(null)
+    const isSAT = config.subject === 'sat'
     connect({
       subject: config.subject,
-      grade: config.grade,
-      unit: config.unit,
+      grade: isSAT ? null : config.grade,
+      unit: isSAT ? null : config.unit,
       topic: config.topic || null,
       num_questions: config.numItems,
       difficulty: config.difficulty,
@@ -204,7 +205,7 @@ export default function MCQ() {
             loading={loading}
             numItemsLabel="Questions"
             generateLabel="Generate Questions"
-            excludeSubjects={['sat']}
+  
             showTopic={false}
           />
         ) : (
