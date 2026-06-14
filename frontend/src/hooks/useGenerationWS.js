@@ -27,6 +27,12 @@ export function useGenerationWS(type) {
   useEffect(() => () => disconnect(), [disconnect])
 
   const connect = useCallback((params) => {
+    // Reject if a socket is already in the CONNECTING state (readyState 0).
+    // This guards against the double-click race where the second call fires
+    // before the React state update disables the button, which would otherwise
+    // close the first socket before its onopen fires (and before params are sent).
+    if (wsRef.current?.readyState === 0) return
+
     disconnect()
 
     const token = localStorage.getItem('ss_token')
@@ -87,10 +93,11 @@ export function useGenerationWS(type) {
 
     ws.onclose = (event) => {
       wsRef.current = null
-      // Only treat as error if we didn't already land in done/error
-      if (event.code !== 1000 && event.code !== 1001) {
+      // Only code 1000 (normal closure) is a clean close.
+      // 1001 "Going Away" mid-run means the proxy/server dropped us — treat as error.
+      if (event.code !== 1000) {
         setStatus(prev => (prev === 'done' || prev === 'error') ? prev : 'error')
-        setError(prev => prev ?? { code: 'disconnected', detail: 'Connection closed unexpectedly.' })
+        setError(prev => prev ?? { code: 'disconnected', detail: 'Connection closed unexpectedly. Please try again.' })
       }
     }
   }, [type, disconnect])

@@ -100,6 +100,7 @@ async def ws_generate_notes(
                     "notes": cached.content["notes"],
                 },
             })
+            await websocket.close()
             return
 
         await websocket.send_json(_prog("loading_context", 2, TOTAL, "Searching curriculum documents…"))
@@ -124,6 +125,7 @@ async def ws_generate_notes(
         if result.get("error"):
             error_code = result["error"]
             await websocket.send_json({"type": "error", "code": error_code, "detail": result.get("message", str(error_code))})
+            await websocket.close()
             return
 
         await websocket.send_json(_prog("saving", 4, TOTAL, "Saving to your library…"))
@@ -150,13 +152,16 @@ async def ws_generate_notes(
                 "token_usage": result.get("token_usage"),
             },
         })
+        await websocket.close()
 
     except WebSocketDisconnect:
         pass
     except OutOfContextError as exc:
         await websocket.send_json({"type": "error", "code": "out_of_context", "detail": exc.message})
+        await websocket.close()
     except Exception:
         await websocket.send_json({"type": "error", "code": "server_error", "detail": "An unexpected error occurred."})
+        await websocket.close()
 
 
 @router.websocket("/generate/mcq")
@@ -211,6 +216,7 @@ async def ws_generate_mcq(
                     "difficulty": cached.content.get("difficulty", body.difficulty),
                 },
             })
+            await websocket.close()
             return
 
         await websocket.send_json(_prog("loading_context", 2, TOTAL, "Loading curriculum context…"))
@@ -221,6 +227,7 @@ async def ws_generate_mcq(
             note_gen = await crud.get_generation_for_user(db, user.id, body.note_id, "notes")
             if not note_gen:
                 await websocket.send_json({"type": "error", "code": "not_found", "detail": "Note not found."})
+                await websocket.close()
                 return
             note_content = note_gen.content.get("notes")
 
@@ -228,6 +235,7 @@ async def ws_generate_mcq(
             chat_session = await crud.get_chat_session_with_messages(db, body.chat_session_id, user.id)
             if not chat_session:
                 await websocket.send_json({"type": "error", "code": "not_found", "detail": "Chat session not found."})
+                await websocket.close()
                 return
             chat_context = _format_chat_context(chat_session.messages)
 
@@ -246,6 +254,7 @@ async def ws_generate_mcq(
 
         if result.get("error"):
             await websocket.send_json({"type": "error", "code": result["error"], "detail": str(result["error"])})
+            await websocket.close()
             return
 
         await websocket.send_json(_prog("saving", 4, TOTAL, "Saving…"))
@@ -273,13 +282,16 @@ async def ws_generate_mcq(
                 "token_usage": result.get("token_usage"),
             },
         })
+        await websocket.close()
 
     except WebSocketDisconnect:
         pass
     except OutOfContextError as exc:
         await websocket.send_json({"type": "error", "code": "out_of_context", "detail": exc.message})
+        await websocket.close()
     except Exception:
         await websocket.send_json({"type": "error", "code": "server_error", "detail": "An unexpected error occurred."})
+        await websocket.close()
 
 
 @router.websocket("/generate/flashcards")
@@ -334,6 +346,7 @@ async def ws_generate_flashcards(
                     "difficulty": cached.content.get("difficulty", body.difficulty),
                 },
             })
+            await websocket.close()
             return
 
         await websocket.send_json(_prog("loading_context", 2, TOTAL, "Loading curriculum context…"))
@@ -344,6 +357,7 @@ async def ws_generate_flashcards(
             note_gen = await crud.get_generation_for_user(db, user.id, body.note_id, "notes")
             if not note_gen:
                 await websocket.send_json({"type": "error", "code": "not_found", "detail": "Note not found."})
+                await websocket.close()
                 return
             note_content = note_gen.content.get("notes")
 
@@ -351,6 +365,7 @@ async def ws_generate_flashcards(
             chat_session = await crud.get_chat_session_with_messages(db, body.chat_session_id, user.id)
             if not chat_session:
                 await websocket.send_json({"type": "error", "code": "not_found", "detail": "Chat session not found."})
+                await websocket.close()
                 return
             chat_context = _format_chat_context(chat_session.messages)
 
@@ -369,6 +384,7 @@ async def ws_generate_flashcards(
 
         if result.get("error"):
             await websocket.send_json({"type": "error", "code": result["error"], "detail": str(result["error"])})
+            await websocket.close()
             return
 
         await websocket.send_json(_prog("saving", 4, TOTAL, "Saving…"))
@@ -396,10 +412,13 @@ async def ws_generate_flashcards(
                 "token_usage": result.get("token_usage"),
             },
         })
+        await websocket.close()
 
     except WebSocketDisconnect:
         pass
     except OutOfContextError as exc:
         await websocket.send_json({"type": "error", "code": "out_of_context", "detail": exc.message})
+        await websocket.close()
     except Exception:
         await websocket.send_json({"type": "error", "code": "server_error", "detail": "An unexpected error occurred."})
+        await websocket.close()
