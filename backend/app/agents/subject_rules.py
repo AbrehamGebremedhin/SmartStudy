@@ -54,8 +54,11 @@ def get_mcq_subject_guidance(subject: str) -> str:
                 Target mix: about 75% reading-based questions and 25% grammar/usage questions.
 
                 READING-BASED QUESTIONS (the majority — roughly 3 of every 4):
-                - Each MUST include a SHORT self-contained passage (4-8 sentences) in the
-                  `passage` field, then ask ONE question about it. Vary the type across the set:
+                - Each MUST include a substantial self-contained passage (10-15 sentences,
+                  roughly 180-280 words) in the `passage` field, then ask ONE question about it.
+                  The passage must be coherent, fully developed, and rich enough to support
+                  inference, reference, and vocabulary-in-context questions naturally.
+                  Vary the type across the set:
                   * Main idea / true-according-to-passage: "Which statement is true according to
                     the passage?" or "What is the main idea of the passage?"
                   * Inference: what the passage implies but does not state outright.
@@ -94,9 +97,11 @@ def get_mcq_subject_guidance(subject: str) -> str:
                   does not; ask which does NOT belong.
                 - Sentence correction: present a sentence and ask which version is grammatically
                   correct, or which underlined part contains the error.
-                - Reading comprehension: include a SHORT self-contained passage (4-8 sentences)
-                  in the `passage` field, then ask a main-idea, inference, reference, or
-                  vocabulary-in-context question about it.
+                - Reading comprehension: include a substantial self-contained passage
+                  (10-15 sentences, roughly 180-280 words) in the `passage` field, then ask
+                  a main-idea, inference, reference, or vocabulary-in-context question about it.
+                  The passage must be fully developed — not a brief excerpt — so the question
+                  requires real engagement with the text.
                 - Analytical / logical reasoning: a short self-contained deduction or logic
                   puzzle answerable from the stem alone.
 
