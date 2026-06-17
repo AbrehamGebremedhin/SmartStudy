@@ -14,7 +14,25 @@ class Settings(BaseSettings):
     poppler_path: str | None = None
     allowed_origins: list[str] = ["http://localhost:3000", "http://localhost:5173"]
 
+    # Gemini keys for the exam-question enrichment job. Each MUST come from a
+    # separate Google Cloud project (free-tier quota is per-project, not per-key).
+    gemini_api_key_1: str | None = None
+    gemini_api_key_2: str | None = None
+    gemini_api_key_3: str | None = None
+    gemini_api_key_4: str | None = None
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+
+    @property
+    def gemini_api_keys(self) -> list[str]:
+        """Non-empty Gemini keys, in order. Used by the enrichment key-rotation pool."""
+        return [
+            k for k in (
+                self.gemini_api_key_1, self.gemini_api_key_2,
+                self.gemini_api_key_3, self.gemini_api_key_4,
+            )
+            if k and k.strip()
+        ]
 
     @field_validator("database_url")
     @classmethod

@@ -1,10 +1,12 @@
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
 
 from app.api.routes import auth, chat, evaluation, flashcards, history, mcq, notes, ws
@@ -55,6 +57,25 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With"],
 )
+
+
+# Serve scraped past-exam images (question diagrams + image choices) for the
+# Past Exams practice mode. The scraper writes them to <repo>/euee_output/images.
+_EXAM_IMAGES_DIR = next(
+    (
+        p for p in (
+            Path(__file__).resolve().parents[3] / "euee_output" / "images",  # repo root
+            Path(__file__).resolve().parents[2] / "euee_output" / "images",  # backend/
+        )
+        if p.is_dir()
+    ),
+    None,
+)
+if _EXAM_IMAGES_DIR is not None:
+    app.mount("/static/exam-images", StaticFiles(directory=str(_EXAM_IMAGES_DIR)), name="exam-images")
+    logger.info("Mounted exam images from %s", _EXAM_IMAGES_DIR)
+else:
+    logger.warning("Exam images directory not found; /static/exam-images not mounted")
 
 
 @app.exception_handler(RateLimitExceeded)
