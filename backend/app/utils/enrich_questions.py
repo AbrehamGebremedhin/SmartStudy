@@ -309,17 +309,76 @@ def _parse_results(text: str) -> list[dict]:
     return data.get("results", []) if isinstance(data, dict) else []
 
 
-def _image_parts(rec: dict):
+def _rec_image_fs(rec: dict) -> list[str]:
+    return [fs for fs in ([rec.get("_question_image_fs")] + [o.get("_image_fs") for o in rec["options"]])
+            if fs and os.path.exists(fs)]
+
+
+def _image_parts(rec: dict):  # Gemini backend
     from google.genai import types
     parts = []
-    for fs in [rec.get("_question_image_fs")] + [o.get("_image_fs") for o in rec["options"]]:
-        if fs and os.path.exists(fs):
-            with open(fs, "rb") as fh:
-                parts.append(types.Part.from_bytes(data=fh.read(), mime_type="image/webp"))
+    for fs in _rec_image_fs(rec):
+        with open(fs, "rb") as fh:
+            parts.append(types.Part.from_bytes(data=fh.read(), mime_type="image/webp"))
     return parts
 
 
+# ── Ollama backend (local gemma4) ─────────────────────────────────────────────
+
+OLLAMA_URL = "http://localhost:11434/api/chat"
+
+
+def _png_b64(fs: str) -> str:
+    """Ollama can't read .webp — transcode to PNG in memory."""
+    import base64
+    import io
+
+    from PIL import Image
+    im = Image.open(fs).convert("RGB")
+    buf = io.BytesIO()
+    im.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+async def ollama_generate(prompt: str, image_fs: list[str] | None, model: str) -> str:
+    import requests
+    msg = {"role": "user", "content": prompt}
+    if image_fs:
+        msg["images"] = [_png_b64(f) for f in image_fs]
+    body = {
+        "model": model,
+        "messages": [{"role": "system", "content": SYSTEM_INSTRUCTION}, msg],
+        "stream": False, "format": "json", "think": False,
+        "options": {"temperature": 0.2},
+    }
+
+    def _post() -> str:
+        r = requests.post(OLLAMA_URL, json=body, timeout=600)
+        r.raise_for_status()
+        return r.json()["message"]["content"]
+    return await asyncio.to_thread(_post)
+
+
 # ── Row building + upsert ─────────────────────────────────────────────────────
+
+def to_letter(ans, options: list[dict]) -> str | None:
+    """Normalize a model's answer to an option letter.
+
+    Gemini returns the letter directly; gemma4 often returns the option *text*.
+    Match a single valid letter first, else map the text back to its option.
+    """
+    letters = option_letters(options)
+    a = (ans or "").strip()
+    if len(a) <= 2 and a[:1].upper() in letters:
+        return a[:1].upper()
+    na = _norm(a)
+    if na:
+        for o in options:
+            ot = _norm(o.get("text") or "")
+            if ot and (ot == na or na in ot or ot in na):
+                return o["letter"]
+    return a[:1].upper() if a[:1].upper() in letters else None
+
 
 def build_row(rec: dict, enr: dict) -> dict:
     options = [{"letter": o["letter"], "text": o.get("text"), "image_url": o.get("image_url")}
@@ -327,7 +386,7 @@ def build_row(rec: dict, enr: dict) -> dict:
     letters = option_letters(rec["options"])
 
     official = rec.get("official_answer")
-    answer = (official or enr.get("correct_answer") or "").strip().upper()[:1]
+    answer = to_letter(official or enr.get("correct_answer"), rec["options"]) or ""
     source = AnswerSource.official.value if official else AnswerSource.inferred.value
     confidence = None if official else enr.get("answer_confidence")
 
@@ -336,8 +395,12 @@ def build_row(rec: dict, enr: dict) -> dict:
     passage = enr.get("passage") if rec["subject"] in {"english", "sat"} else None
 
     correct_expl = enr.get("correct_explanations") or []
-    incorrect_expl = {k.upper(): v for k, v in (enr.get("incorrect_explanations") or {}).items()
-                      if k.upper() in letters and k.upper() != answer}
+    # Keys may be letters (Gemini) or option text (gemma4) — normalize both to letters.
+    incorrect_expl = {}
+    for k, v in (enr.get("incorrect_explanations") or {}).items():
+        letter = to_letter(k, rec["options"])
+        if letter in letters and letter != answer:
+            incorrect_expl[letter] = v
 
     structurally_ok = is_structurally_valid(answer, rec["options"], correct_expl, incorrect_expl)
     complete = structurally_ok and set(incorrect_expl) == set(letters) - {answer}
@@ -450,13 +513,14 @@ async def resolve_grade_unit_context(retriever: RetrievalAgent, rec: dict) -> st
 # ── Main run ──────────────────────────────────────────────────────────────────
 
 async def run(subject_filter: str | None, limit: int | None, batch_size: int,
-              model: str, reset: bool) -> None:
-    keys = settings.gemini_api_keys
-    if not keys:
-        sys.exit("No Gemini keys configured (set GEMINI_API_KEY_1..4 in .env).")
-    if len(keys) < 4:
-        console.print(f"[yellow]Warning: only {len(keys)} Gemini key(s) loaded; "
-                      f"throughput/quota will be limited.[/yellow]")
+              model: str, reset: bool, backend: str) -> None:
+    if backend == "gemini":
+        keys = settings.gemini_api_keys
+        if not keys:
+            sys.exit("No Gemini keys configured (set GEMINI_API_KEY_1..4 in .env).")
+        if len(keys) < 4:
+            console.print(f"[yellow]Warning: only {len(keys)} Gemini key(s) loaded; "
+                          f"throughput/quota will be limited.[/yellow]")
 
     if reset:
         async with AsyncSessionLocal() as db:
@@ -477,12 +541,19 @@ async def run(subject_filter: str | None, limit: int | None, batch_size: int,
         console.print("[green]Nothing to do — all questions enriched.[/green]")
         return
 
-    pool = GeminiKeyPool(keys, model=model)
+    pool = GeminiKeyPool(settings.gemini_api_keys, model=model) if backend == "gemini" else None
     retriever = RetrievalAgent()
     text_todo = [r for r in todo if not r["has_image"]]
     image_todo = [r for r in todo if r["has_image"]]
 
     stats = {"official": 0, "inferred": 0, "needs_review": 0, "failed": 0}
+
+    async def generate(prompt: str, multimodal_rec: dict | None) -> str:
+        image_fs = _rec_image_fs(multimodal_rec) if multimodal_rec else None
+        if backend == "ollama":
+            return await ollama_generate(prompt, image_fs, model=model)
+        contents = [prompt, *(_image_parts(multimodal_rec) if multimodal_rec else [])]
+        return await pool.generate(contents, system_instruction=SYSTEM_INSTRUCTION)
 
     async def process_batch(batch_recs: list[dict], multimodal: bool) -> None:
         # Resolve grade/unit/context locally first (free).
@@ -491,8 +562,7 @@ async def run(subject_filter: str | None, limit: int | None, batch_size: int,
         try:
             if multimodal:
                 rec = batch_recs[0]
-                contents = [build_single_prompt(rec, rec["_ctx"]), *_image_parts(rec)]
-                text = await pool.generate(contents, system_instruction=SYSTEM_INSTRUCTION)
+                text = await generate(build_single_prompt(rec, rec["_ctx"]), rec)
                 results = _parse_results(text)
                 if not results:
                     logger.warning("Empty multimodal parse for %s; raw=%r",
@@ -500,11 +570,10 @@ async def run(subject_filter: str | None, limit: int | None, batch_size: int,
                 results = [{**(results[0] if results else {}), "index": 0}]
             else:
                 items = [{"index": i, "rec": r, "context": r["_ctx"]} for i, r in enumerate(batch_recs)]
-                prompt = build_text_batch_prompt(items)
-                text = await pool.generate(prompt, system_instruction=SYSTEM_INSTRUCTION)
+                text = await generate(build_text_batch_prompt(items), None)
                 results = _parse_results(text)
         except Exception as e:  # noqa: BLE001
-            logger.error("Gemini batch failed (%d q): %s", len(batch_recs), e)
+            logger.error("%s batch failed (%d q): %s", backend, len(batch_recs), e)
             stats["failed"] += len(batch_recs)
             return
 
@@ -534,6 +603,9 @@ async def run(subject_filter: str | None, limit: int | None, batch_size: int,
         BarColumn(), MofNCompleteColumn(), TextColumn("·"),
         TimeElapsedColumn(), TextColumn("eta"), TimeRemainingColumn(),
     ]
+    def backend_status() -> str:
+        return pool.status_line() if pool else f"ollama:{model}"
+
     total = len(text_todo) + len(image_todo)
     processed = 0
     with Progress(*columns, console=console) as progress:
@@ -544,39 +616,43 @@ async def run(subject_filter: str | None, limit: int | None, batch_size: int,
             batch = text_todo[i:i + batch_size]
             await process_batch(batch, multimodal=False)
             processed += len(batch)
-            progress.update(task, advance=len(batch),
-                            description=f"text · keys[{pool.status_line()}]")
+            progress.update(task, advance=len(batch), description=f"text · {backend_status()}")
             write_checkpoint({
                 "total": total, "done_now": processed, "already_done": len(done),
                 "remaining": total - processed, "last_content_hash": batch[-1]["content_hash"],
-                "stats": stats, "keys": pool.status_line(),
+                "stats": stats, "backend": backend_status(),
             })
 
         # Image questions one at a time (multimodal).
         for rec in image_todo:
             await process_batch([rec], multimodal=True)
             processed += 1
-            progress.update(task, advance=1, description=f"image · keys[{pool.status_line()}]")
+            progress.update(task, advance=1, description=f"image · {backend_status()}")
             write_checkpoint({
                 "total": total, "done_now": processed, "already_done": len(done),
                 "remaining": total - processed, "last_content_hash": rec["content_hash"],
-                "stats": stats, "keys": pool.status_line(),
+                "stats": stats, "backend": backend_status(),
             })
 
+    calls = f" · Gemini calls={pool.total_calls()}" if pool else ""
     console.print(f"\n[green bold]Done.[/green bold] official={stats['official']} "
                   f"inferred={stats['inferred']} needs_review={stats['needs_review']} "
-                  f"failed={stats['failed']} · Gemini calls={pool.total_calls()}")
+                  f"failed={stats['failed']}{calls}")
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Enrich scraped exam questions into exam_questions.")
     ap.add_argument("--subject", help="Canonical subject filter, e.g. biology, maths, sat")
     ap.add_argument("--limit", type=int, help="Cap number of questions (dry-run)")
-    ap.add_argument("--batch-size", type=int, default=10, help="Text questions per Gemini call")
-    ap.add_argument("--model", default=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
+    ap.add_argument("--batch-size", type=int, default=10, help="Text questions per generate call")
+    ap.add_argument("--backend", choices=["ollama", "gemini"], default="ollama",
+                    help="ollama (local gemma4, default) or gemini (cloud key pool)")
+    ap.add_argument("--model", help="Override model (default: gemma4:latest for ollama, "
+                                    "gemini-2.5-flash for gemini)")
     ap.add_argument("--reset", action="store_true", help="Wipe exam_questions before running")
     args = ap.parse_args()
-    asyncio.run(run(args.subject, args.limit, args.batch_size, args.model, args.reset))
+    model = args.model or ("gemma4:latest" if args.backend == "ollama" else "gemini-2.5-flash")
+    asyncio.run(run(args.subject, args.limit, args.batch_size, model, args.reset, args.backend))
 
 
 if __name__ == "__main__":
