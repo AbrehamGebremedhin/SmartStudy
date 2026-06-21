@@ -402,6 +402,14 @@ def build_row(rec: dict, enr: dict) -> dict:
         if letter in letters and letter != answer:
             incorrect_expl[letter] = v
 
+    # gemma4 sometimes returns text fields as lists — coerce to str for VARCHAR/Text cols.
+    def _text(v):
+        if v is None or isinstance(v, str):
+            return v
+        if isinstance(v, list):
+            return "\n".join(str(x) for x in v)
+        return str(v)
+
     structurally_ok = is_structurally_valid(answer, rec["options"], correct_expl, incorrect_expl)
     complete = structurally_ok and set(incorrect_expl) == set(letters) - {answer}
     needs_review = (not complete) or (confidence is not None and float(confidence) < CONF_REVIEW_THRESHOLD)
@@ -418,9 +426,9 @@ def build_row(rec: dict, enr: dict) -> dict:
             "number": rec["number"],
             "grade": rec.get("grade"),
             "unit": rec.get("unit"),
-            "topic": enr.get("topic"),
+            "topic": _text(enr.get("topic")),
             "question": rec["question"],
-            "passage": passage,
+            "passage": _text(passage),
             "question_image_url": rec["question_image_url"],
             "options": options,
             "correct_answer": answer or None,
@@ -428,7 +436,7 @@ def build_row(rec: dict, enr: dict) -> dict:
             "answer_confidence": confidence,
             "correct_explanations": correct_expl,
             "incorrect_explanations": incorrect_expl,
-            "workout_steps": enr.get("workout_steps"),
+            "workout_steps": _text(enr.get("workout_steps")),
             "difficulty": "hard",
             "needs_review": needs_review,
         },
@@ -577,7 +585,15 @@ async def run(subject_filter: str | None, limit: int | None, batch_size: int,
             stats["failed"] += len(batch_recs)
             return
 
-        by_index = {int(r["index"]): r for r in results if "index" in r}
+        # gemma4 occasionally emits a malformed element (e.g. a bare string) inside
+        # results — skip non-dicts so one bad batch never kills the run.
+        by_index = {}
+        for r in results:
+            if isinstance(r, dict) and "index" in r:
+                try:
+                    by_index[int(r["index"])] = r
+                except (ValueError, TypeError):
+                    pass
         rows = []
         for i, rec in enumerate(batch_recs):
             enr = by_index.get(i)
@@ -596,7 +612,17 @@ async def run(subject_filter: str | None, limit: int | None, batch_size: int,
             stats["official" if row["answer_source"] == "official" else "inferred"] += 1
             if row["needs_review"]:
                 stats["needs_review"] += 1
-        await upsert_rows(rows)  # atomic per batch
+        try:
+            await upsert_rows(rows)  # atomic per batch
+        except Exception as e:  # noqa: BLE001 — a bad row must not kill the run; resume retries it
+            logger.error("Upsert failed for %d rows (%s); skipping batch: %s",
+                         len(rows), [r["content_hash"][:8] for r in rows], e)
+            # undo the optimistic stats bump for this uncommitted batch
+            for row in rows:
+                stats["official" if row["answer_source"] == "official" else "inferred"] -= 1
+                if row["needs_review"]:
+                    stats["needs_review"] -= 1
+            stats["failed"] += len(rows)
 
     columns = [
         SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
@@ -651,7 +677,7 @@ def main() -> None:
                                     "gemini-2.5-flash for gemini)")
     ap.add_argument("--reset", action="store_true", help="Wipe exam_questions before running")
     args = ap.parse_args()
-    model = args.model or ("gemma4:latest" if args.backend == "ollama" else "gemini-2.5-flash")
+    model = args.model or ("gemma4:12b" if args.backend == "ollama" else "gemini-2.5-flash")
     asyncio.run(run(args.subject, args.limit, args.batch_size, model, args.reset, args.backend))
 
 
