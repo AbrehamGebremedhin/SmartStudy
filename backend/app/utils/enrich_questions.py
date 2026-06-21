@@ -43,7 +43,7 @@ import orjson
 from rich.console import Console
 from rich.progress import (BarColumn, MofNCompleteColumn, Progress, SpinnerColumn,
                            TextColumn, TimeElapsedColumn, TimeRemainingColumn)
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 # Agents use bare imports; put the agents dir on the path (mirrors services/generation.py).
@@ -212,20 +212,52 @@ def is_structurally_valid(correct_answer, options, correct_expl, incorrect_expl)
     )
 
 
+# Depth gate: the shallow-explanation defect this rebuild targets. A row passes only
+# with a real step-by-step argument AND a reason for every wrong option.
+MIN_EXPL_STEPS = 3
+MIN_EXPL_CHARS = 220
+
+
+def is_deep_enough(correct_answer, options, correct_expl, incorrect_expl) -> bool:
+    if not is_structurally_valid(correct_answer, options, correct_expl, incorrect_expl):
+        return False
+    steps = [s for s in correct_expl if str(s).strip()]
+    if len(steps) < MIN_EXPL_STEPS or sum(len(str(s)) for s in steps) < MIN_EXPL_CHARS:
+        return False
+    wrong = set(option_letters(options)) - {correct_answer}
+    return set(incorrect_expl) == wrong and all(str(v).strip() for v in incorrect_expl.values())
+
+
 # ── Gemini enrichment ─────────────────────────────────────────────────────────
 
+# DeepSeek-tuned (positive framing, CO-STAR shape): DeepSeek largely ignores "never"
+# constraints, so every rule states the desired behaviour with a concrete example.
 SYSTEM_INSTRUCTION = (
-    "You are an expert Ethiopian EUEE exam tutor. For each multiple-choice question you "
-    "receive, determine the correct option, and write clear, factually accurate explanations. "
-    "Refer to options by their content, never by letter, inside explanations. Output strict JSON only.\n"
-    "PASSAGE RULE (critical): set \"passage\" to null UNLESS the question literally cannot be "
-    "answered without an accompanying reading passage, quoted sentence, or fill-in-the-blank "
-    "sentence that belongs to the question itself (mainly English/SAT reading & vocabulary). "
-    "For virtually all physics, chemistry, biology, maths, and standalone questions, passage MUST "
-    "be null. NEVER put curriculum context, source text, or your own explanation in passage.\n"
-    "CONTEXT RULE: the 'Curriculum context' provided is ONLY to help you label the topic. Never "
-    "copy it into any field and never reference it in explanations (no 'the context says', 'the "
-    "source states', 'Exercise 4.1', etc.). Explanations must stand on general subject knowledge."
+    "# Role\n"
+    "You are an expert Ethiopian EUEE exam tutor who writes deep, accurate answer explanations.\n"
+    "# Task\n"
+    "For the multiple-choice question given, identify the correct option and explain it thoroughly. "
+    "Respond with a single strict JSON object and nothing else.\n"
+    "# Explanation depth (the priority)\n"
+    "- correct_explanations: an array of 3-5 full sentences forming a step-by-step argument — begin "
+    "from the governing concept or principle, reason through to why the correct option follows, and "
+    "end with the conclusion. The steps should teach, not merely assert.\n"
+    "- incorrect_explanations: one entry per wrong option, each naming the specific misconception or "
+    "error that makes that option wrong.\n"
+    "- workout_steps: for quantitative questions, give the full numbered calculation with units; use "
+    "null otherwise.\n"
+    "- Identify each option by its content or meaning so every explanation is self-contained and "
+    "stays correct regardless of option order.\n"
+    "# Formatting\n"
+    "- Write all mathematics in plain ASCII text, e.g. theta, sin, sqrt, 'F = B*I*l*sin(theta)', "
+    "'B = mu_0*I/(2*pi*r)'. Use Greek letters as words (theta, mu) and ASCII operators.\n"
+    "- correct_answer is the single letter (A, B, C, D, or E) of the correct option.\n"
+    "# Curriculum context\n"
+    "- Use the provided curriculum context only to choose an accurate topic label; base every "
+    "explanation on general subject knowledge and the question itself.\n"
+    "# Passage field\n"
+    "- Provide passage text only when the question quotes a reading passage or sentence the student "
+    "needs (mainly English/SAT reading and vocabulary); set passage to null for all other questions."
 )
 
 
@@ -241,53 +273,80 @@ def _options_block(options: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _output_schema_hint(letters: list[str]) -> str:
+def _gen_schema_hint() -> str:
     return (
-        '{"results":[{"index":<int>,"topic":"specific concept tested",'
-        '"passage":"reading passage/quoted text the question needs, else null",'
-        '"correct_answer":"one of ' + "".join(letters) + '",'
+        '{"topic":"specific concept tested",'
+        '"passage":"reading text the question needs, else null",'
+        '"correct_answer":"SINGLE LETTER (A/B/C/D/E) — the option label, NOT its text",'
         '"answer_confidence":0.0-1.0,'
-        '"correct_explanations":["step 1","step 2"],'
-        '"incorrect_explanations":{"<wrong letter>":"why it is wrong"},'
-        '"workout_steps":"calculation steps if any, else null"}]}'
+        '"correct_explanations":["step 1 (concept)","step 2 (reasoning)","step 3 (conclusion)"],'
+        '"incorrect_explanations":{"<each wrong letter>":"the specific misconception that makes it wrong"},'
+        '"workout_steps":"numbered calculation with units if quantitative, else null"}'
     )
 
 
-def build_text_batch_prompt(batch: list[dict]) -> str:
-    parts = [
-        "Enrich each question below. Return JSON exactly as specified — one result per "
-        "question, matched by index. incorrect_explanations must contain an entry for every "
-        "option letter EXCEPT the correct one. If an official answer is given, explain that "
-        "answer (do not change it); otherwise determine the answer yourself.\n",
-    ]
-    for item in batch:
-        rec = item["rec"]
-        ctx = item["context"]
-        parts.append(f"### index {item['index']}")
-        parts.append(f"Subject: {rec['subject']}")
-        if ctx:
-            parts.append(f"Curriculum context (for grounding the topic): {ctx}")
-        if rec.get("official_answer"):
-            parts.append(f"Official correct answer (keep this): {rec['official_answer']}")
-        parts.append(f"Question: {rec['question']}")
-        parts.append("Options:\n" + _options_block(rec["options"]))
-        parts.append("")
-    letters = CHOICE_LETTERS
-    parts.append("Return ONLY this JSON shape:\n" + _output_schema_hint(letters))
+# Few-shot exemplar (Gemini cookbook: "prompts without few-shot examples are likely to be
+# less effective"). Sets the depth bar — concept→reasoning→conclusion + per-option misconceptions.
+_FEWSHOT = """<example>
+<question>A 2 kg object accelerates from rest to 6 m/s in 3 s. What is the net force on it?</question>
+<options>
+  A) 2 N
+  B) 4 N
+  C) 12 N
+  D) 18 N
+</options>
+<output>
+{"topic":"Newton's second law (F = ma)","passage":null,"correct_answer":"B","answer_confidence":1.0,
+"correct_explanations":[
+  "Newton's second law states the net force equals mass times acceleration, F = m*a, so the acceleration must be found first.",
+  "Acceleration is the change in velocity over time: a = (6 m/s - 0) / 3 s = 2 m/s^2.",
+  "Multiplying mass by acceleration gives F = 2 kg * 2 m/s^2 = 4 N, which matches the second option."],
+"incorrect_explanations":{
+  "A":"This uses the mass alone as if force equalled mass, ignoring acceleration entirely.",
+  "C":"This multiplies mass by the final velocity (2*6) instead of by acceleration — a confusion of velocity with acceleration.",
+  "D":"This multiplies mass by velocity and then by something else; it has no basis in F = m*a."},
+"workout_steps":"1) a = dv/dt = 6/3 = 2 m/s^2.  2) F = m*a = 2*2 = 4 N."}
+</output>
+</example>"""
+
+
+def build_gen_prompt(rec: dict, ctx: str) -> str:
+    """One question per call — deep enrichment (the generation stage).
+
+    Cookbook-aligned: role/format/rules live in SYSTEM_INSTRUCTION; here we give a
+    worked example, then context, then the question last with a bridging instruction.
+    """
+    parts = [_FEWSHOT, "", "Now enrich the question below to the SAME depth and JSON shape."]
+    if rec["has_image"]:
+        parts.append("Diagrams are attached as images — read them carefully.")
+    parts.append(f"\n## Subject\n{rec['subject']}")
+    if ctx:
+        parts.append(f"\n## Curriculum context (for grounding the topic ONLY — do not quote)\n{ctx}")
+    if rec.get("official_answer"):
+        parts.append(f"\n## Official correct answer (keep this; explain why it is right)\n{rec['official_answer']}")
+    parts.append(f"\n## Question\n{rec['question']}")
+    parts.append("\n## Options\n" + _options_block(rec["options"]))
+    parts.append("\nBased on the above, return ONLY this JSON object:\n" + _gen_schema_hint())
     return "\n".join(parts)
 
 
-def build_single_prompt(rec: dict, ctx: str) -> str:
-    parts = ["Enrich this exam question. Some content is shown as images below."]
-    parts.append(f"Subject: {rec['subject']}")
-    if ctx:
-        parts.append(f"Curriculum context (for grounding the topic): {ctx}")
-    if rec.get("official_answer"):
-        parts.append(f"Official correct answer (keep this): {rec['official_answer']}")
-    parts.append(f"Question: {rec['question']}")
-    parts.append("Options:\n" + _options_block(rec["options"]))
-    parts.append("Return ONLY this JSON shape (single-element results array):\n"
-                 + _output_schema_hint(CHOICE_LETTERS))
+def build_judge_prompt(batch: list[dict]) -> str:
+    """Many questions per call — short verdicts (the validation stage)."""
+    parts = [
+        "You are validating already-written answer explanations for EUEE multiple-choice "
+        "questions. For EACH item, independently decide the correct option, then judge the "
+        "given answer and explanations. Return JSON: "
+        '{"results":[{"index":<int>,"your_answer":"<letter>",'
+        '"answer_agrees":<true if your_answer equals the given answer>,'
+        '"depth_score":<1-5: how thorough/correct the explanations are>}]}\n',
+    ]
+    for item in batch:
+        parts.append(f"### index {item['index']}")
+        parts.append(f"Question: {item['question']}")
+        parts.append("Options:\n" + _options_block(item["options"]))
+        parts.append(f"Given answer: {item['correct_answer']}")
+        parts.append("Given correct_explanations: " + " | ".join(item["correct_explanations"] or []))
+        parts.append("")
     return "\n".join(parts)
 
 
@@ -306,21 +365,13 @@ def _parse_results(text: str) -> list[dict]:
             return []
     if isinstance(data, list):
         return data
-    return data.get("results", []) if isinstance(data, dict) else []
+    # `{"results": null}` -> .get returns None, not the default; coerce to [].
+    return (data.get("results") or []) if isinstance(data, dict) else []
 
 
 def _rec_image_fs(rec: dict) -> list[str]:
     return [fs for fs in ([rec.get("_question_image_fs")] + [o.get("_image_fs") for o in rec["options"]])
             if fs and os.path.exists(fs)]
-
-
-def _image_parts(rec: dict):  # Gemini backend
-    from google.genai import types
-    parts = []
-    for fs in _rec_image_fs(rec):
-        with open(fs, "rb") as fh:
-            parts.append(types.Part.from_bytes(data=fh.read(), mime_type="image/webp"))
-    return parts
 
 
 # ── Ollama backend (local gemma4) ─────────────────────────────────────────────
@@ -340,7 +391,8 @@ def _png_b64(fs: str) -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
-async def ollama_generate(prompt: str, image_fs: list[str] | None, model: str) -> str:
+async def ollama_generate(prompt: str, image_fs: list[str] | None, model: str,
+                          think: bool = True) -> str:
     import requests
     msg = {"role": "user", "content": prompt}
     if image_fs:
@@ -348,15 +400,51 @@ async def ollama_generate(prompt: str, image_fs: list[str] | None, model: str) -
     body = {
         "model": model,
         "messages": [{"role": "system", "content": SYSTEM_INSTRUCTION}, msg],
-        "stream": False, "format": "json", "think": False,
+        "stream": False, "format": "json", "think": think,
         "options": {"temperature": 0.2},
     }
 
     def _post() -> str:
-        r = requests.post(OLLAMA_URL, json=body, timeout=600)
+        r = requests.post(OLLAMA_URL, json=body, timeout=900)
         r.raise_for_status()
         return r.json()["message"]["content"]
     return await asyncio.to_thread(_post)
+
+
+# ── DeepSeek backend (cloud, text-only, parallel) ──────────────────────────────
+
+def make_deepseek_llm():
+    from langchain_deepseek import ChatDeepSeek
+    # temperature 0: DeepSeek's own guidance for factual/maths work — maximizes accuracy.
+    llm = ChatDeepSeek(model="deepseek-v4-flash", api_key=settings.deepseek_api_key,
+                       temperature=0, max_retries=3)
+    return llm.bind(response_format={"type": "json_object"})
+
+
+async def deepseek_generate(llm, prompt: str) -> str:
+    from langchain_core.messages import HumanMessage, SystemMessage
+    resp = await llm.ainvoke([SystemMessage(content=SYSTEM_INSTRUCTION), HumanMessage(content=prompt)])
+    return resp.content if isinstance(resp.content, str) else str(resp.content)
+
+
+def _parse_one(text: str) -> dict:
+    """Parse a single enrichment object (gemma may wrap it as {'results':[obj]})."""
+    raw = (text or "").strip()
+    raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.M).strip()
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        start, end = raw.find("{"), raw.rfind("}")
+        if start == -1 or end <= start:
+            return {}
+        try:
+            data = json.loads(raw[start:end + 1])
+        except json.JSONDecodeError:
+            return {}
+    if isinstance(data, dict) and isinstance(data.get("results"), list) and data["results"]:
+        first = data["results"][0]
+        return first if isinstance(first, dict) else {}
+    return data if isinstance(data, dict) else {}
 
 
 # ── Row building + upsert ─────────────────────────────────────────────────────
@@ -377,7 +465,21 @@ def to_letter(ans, options: list[dict]) -> str | None:
             ot = _norm(o.get("text") or "")
             if ot and (ot == na or na in ot or ot in na):
                 return o["letter"]
-    return a[:1].upper() if a[:1].upper() in letters else None
+    if a[:1].upper() in letters:
+        return a[:1].upper()
+    # Last resort: best option by word overlap (handles paraphrased answers).
+    atoks = set(na.split())
+    if atoks:
+        best, score = None, 0.0
+        for o in options:
+            otoks = set(_norm(o.get("text") or "").split())
+            if otoks:
+                jac = len(atoks & otoks) / len(atoks | otoks)
+                if jac > score:
+                    best, score = o["letter"], jac
+        if score >= 0.5:
+            return best
+    return None
 
 
 def build_row(rec: dict, enr: dict) -> dict:
@@ -394,10 +496,18 @@ def build_row(rec: dict, enr: dict) -> dict:
     # sometimes dumps explanation text into `passage`; drop it deterministically.
     passage = enr.get("passage") if rec["subject"] in {"english", "sat"} else None
 
-    correct_expl = enr.get("correct_explanations") or []
+    # gemma4 sometimes misspells keys (e.g. "correct_explanasions"); match by prefix.
+    def _pick(*prefixes):
+        for k, v in enr.items():
+            kn = k.replace("_", "").lower()
+            if any(kn.startswith(p) for p in prefixes):
+                return v
+        return None
+
+    correct_expl = _pick("correctexplan") or []
     # Keys may be letters (Gemini) or option text (gemma4) — normalize both to letters.
     incorrect_expl = {}
-    for k, v in (enr.get("incorrect_explanations") or {}).items():
+    for k, v in (_pick("incorrectexplan") or {}).items():
         letter = to_letter(k, rec["options"])
         if letter in letters and letter != answer:
             incorrect_expl[letter] = v
@@ -518,167 +628,214 @@ async def resolve_grade_unit_context(retriever: RetrievalAgent, rec: dict) -> st
     return " ".join(d.page_content for d in docs[:3])[:1500]
 
 
-# ── Main run ──────────────────────────────────────────────────────────────────
+# ── Progress helper ───────────────────────────────────────────────────────────
 
-async def run(subject_filter: str | None, limit: int | None, batch_size: int,
-              model: str, reset: bool, backend: str) -> None:
-    if backend == "gemini":
-        keys = settings.gemini_api_keys
-        if not keys:
-            sys.exit("No Gemini keys configured (set GEMINI_API_KEY_1..4 in .env).")
-        if len(keys) < 4:
-            console.print(f"[yellow]Warning: only {len(keys)} Gemini key(s) loaded; "
-                          f"throughput/quota will be limited.[/yellow]")
+def _progress() -> Progress:
+    return Progress(
+        SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
+        BarColumn(), MofNCompleteColumn(), TextColumn("·"),
+        TimeElapsedColumn(), TextColumn("eta"), TimeRemainingColumn(),
+        console=console,
+    )
 
+
+# ── Stage 1: gemma generation (local, 1 question/call, thinking on, depth-gated) ──
+
+async def generate_stage(subject_filter: str | None, limit: int | None,
+                         image_model: str, concurrency: int) -> None:
+    records = load_unique_questions(subject_filter)
+    done = await heal_and_get_done({r["content_hash"] for r in records})
+    todo = [r for r in records if r["content_hash"] not in done]
+    if limit:
+        todo = todo[:limit]
+    text_todo = [r for r in todo if not r["has_image"]]
+    image_todo = [r for r in todo if r["has_image"]]
+    console.print(f"[bold]Generate: {len(done)} done · {len(text_todo)} text (DeepSeek) "
+                  f"+ {len(image_todo)} image (gemma)[/bold]")
+    if not todo:
+        return
+
+    # Preflight: DeepSeek key for text, Ollama vision model for images.
+    if text_todo and not settings.deepseek_api_key:
+        sys.exit("DEEPSEEK_API_KEY not set in .env.")
+    if image_todo:
+        import requests
+        try:
+            names = {m["name"] for m in requests.get(
+                "http://localhost:11434/api/tags", timeout=10).json().get("models", [])}
+        except Exception as e:  # noqa: BLE001
+            sys.exit(f"Cannot reach Ollama at localhost:11434: {e}")
+        if image_model not in names:
+            sys.exit(f"Ollama model {image_model!r} not found. Available: {sorted(names)}")
+
+    retriever = RetrievalAgent()
+    deepseek = make_deepseek_llm() if text_todo else None
+    stats = {"ok": 0, "needs_review": 0, "retried": 0, "failed": 0}
+
+    async def enrich(rec: dict, gen_fn):
+        ctx = await resolve_grade_unit_context(retriever, rec)
+        for attempt in (1, 2):
+            try:
+                text = await gen_fn(rec, ctx)
+            except Exception as e:  # noqa: BLE001
+                logger.error("gen failed %s (attempt %d): %s", rec["content_hash"][:8], attempt, e)
+                continue
+            row = build_row(rec, _parse_one(text))["row"]
+            deep = is_deep_enough(row["correct_answer"], rec["options"],
+                                  row["correct_explanations"], row["incorrect_explanations"])
+            if deep:
+                return row, attempt
+            if attempt == 2 and row["correct_answer"]:   # usable but shallow → keep, flag
+                row["needs_review"] = True
+                logger.warning("shallow after retry %s", rec["content_hash"][:8])
+                return row, attempt
+        return None, 2
+
+    async def ds_gen(rec, ctx):
+        return await deepseek_generate(deepseek, build_gen_prompt(rec, ctx))
+
+    async def gm_gen(rec, ctx):
+        return await ollama_generate(build_gen_prompt(rec, ctx), _rec_image_fs(rec),
+                                     model=image_model, think=True)
+
+    n = {"done": 0}
+
+    async def handle(rec, gen_fn, progress, task):
+        row, attempt = await enrich(rec, gen_fn)
+        if row is None:
+            stats["failed"] += 1
+        else:
+            if attempt == 2:
+                stats["retried"] += 1
+            stats["needs_review" if row["needs_review"] else "ok"] += 1
+            try:
+                await upsert_rows([row])
+            except Exception as e:  # noqa: BLE001
+                logger.error("upsert failed %s: %s", rec["content_hash"][:8], e)
+                stats["failed"] += 1
+        n["done"] += 1
+        progress.update(task, advance=1, description=f"gen · {stats}")
+        if n["done"] % 25 == 0:
+            write_checkpoint({"stage": "generate", "total": len(todo), "done_now": n["done"],
+                              "already_done": len(done), "remaining": len(todo) - n["done"], "stats": stats})
+
+    with _progress() as progress:
+        task = progress.add_task("Generating", total=len(todo))
+        # Text: parallel DeepSeek (cloud, no GPU limit).
+        sem = asyncio.Semaphore(concurrency)
+
+        async def bounded(rec):
+            async with sem:
+                await handle(rec, ds_gen, progress, task)
+        if text_todo:
+            await asyncio.gather(*(bounded(r) for r in text_todo))
+        # Images: serial gemma (single GPU).
+        for rec in image_todo:
+            await handle(rec, gm_gen, progress, task)
+
+    write_checkpoint({"stage": "generate", "total": len(todo), "done_now": n["done"],
+                      "already_done": len(done), "remaining": len(todo) - n["done"], "stats": stats})
+    console.print(f"[green bold]Generate done.[/green bold] {stats}")
+
+
+# ── Stage 2: gemini validation (cloud, batched judge, short verdicts) ────────────
+
+JUDGE_SYSTEM = ("You are a meticulous EUEE exam answer-key validator. For each question, work out "
+                "the correct option yourself, then judge the supplied answer and explanations. "
+                "Output strict JSON only.")
+JUDGE_BATCH = 15
+
+
+async def validate_stage(judge_model: str, limit: int | None) -> None:
+    keys = settings.gemini_api_keys
+    if not keys:
+        sys.exit("No Gemini keys configured (set GEMINI_API_KEY_1..4 in .env).")
+    pool = GeminiKeyPool(keys, model=judge_model)
+
+    async with AsyncSessionLocal() as db:
+        q = select(ExamQuestion).where(ExamQuestion.validation_score.is_(None))
+        if limit:
+            q = q.limit(limit)
+        rows = (await db.execute(q)).scalars().all()
+        items = [{"id": r.id, "question": r.question, "options": r.options,
+                  "correct_answer": r.correct_answer, "correct_explanations": r.correct_explanations,
+                  "needs_review": r.needs_review} for r in rows]
+    console.print(f"[bold]Validate: {len(items)} rows to judge[/bold]")
+    if not items:
+        return
+
+    stats = {"agree": 0, "disagree": 0, "low_depth": 0}
+    with _progress() as progress:
+        task = progress.add_task("Validating (gemini)", total=len(items))
+        for i in range(0, len(items), JUDGE_BATCH):
+            batch = items[i:i + JUDGE_BATCH]
+            jbatch = [{"index": j, **b} for j, b in enumerate(batch)]
+            try:
+                text = await pool.generate(build_judge_prompt(jbatch), system_instruction=JUDGE_SYSTEM)
+                verdicts = {int(v["index"]): v for v in _parse_results(text)
+                            if isinstance(v, dict) and "index" in v}
+            except Exception as e:  # noqa: BLE001 — a failed judge batch leaves rows unvalidated; rerun picks them up
+                logger.error("judge batch failed: %s", e)
+                verdicts = {}
+
+            updates = []
+            for j, b in enumerate(batch):
+                v = verdicts.get(j)
+                if not v:
+                    continue
+                judged = to_letter(v.get("your_answer"), b["options"])
+                agrees = (judged == b["correct_answer"]) if judged else bool(v.get("answer_agrees"))
+                try:
+                    depth = int(v.get("depth_score") or 0)
+                except (ValueError, TypeError):
+                    depth = 0
+                needs_review = b["needs_review"] or (not agrees) or depth < 3
+                updates.append((b["id"], depth, agrees, needs_review))
+                stats["agree" if agrees else "disagree"] += 1
+                if depth < 3:
+                    stats["low_depth"] += 1
+
+            if updates:
+                async with AsyncSessionLocal() as db:
+                    for rid, depth, agrees, nr in updates:
+                        await db.execute(update(ExamQuestion).where(ExamQuestion.id == rid)
+                                         .values(validation_score=depth, answer_agreed=agrees, needs_review=nr))
+                    await db.commit()
+            progress.update(task, advance=len(batch), description=f"judge · {pool.status_line()}")
+            write_checkpoint({"stage": "validate", "total": len(items),
+                              "done_now": min(i + JUDGE_BATCH, len(items)), "stats": stats,
+                              "keys": pool.status_line()})
+    console.print(f"[green bold]Validate done.[/green bold] {stats} · Gemini calls={pool.total_calls()}")
+
+
+# ── Dispatcher ──────────────────────────────────────────────────────────────────
+
+async def run(stage: str, subject_filter: str | None, limit: int | None,
+              image_model: str, judge_model: str, concurrency: int, reset: bool) -> None:
     if reset:
         async with AsyncSessionLocal() as db:
             await db.execute(delete(ExamQuestion))
             await db.commit()
         console.print("[yellow]--reset: cleared exam_questions.[/yellow]")
-
-    records = load_unique_questions(subject_filter)
-    all_hashes = {r["content_hash"] for r in records}
-    done = await heal_and_get_done(all_hashes)
-    todo = [r for r in records if r["content_hash"] not in done]
-    if limit:
-        todo = todo[:limit]
-
-    console.print(f"[bold]{len(done)} already done · {len(todo)} to process"
-                  f"{f' (capped at {limit})' if limit else ''}[/bold]")
-    if not todo:
-        console.print("[green]Nothing to do — all questions enriched.[/green]")
-        return
-
-    pool = GeminiKeyPool(settings.gemini_api_keys, model=model) if backend == "gemini" else None
-    retriever = RetrievalAgent()
-    text_todo = [r for r in todo if not r["has_image"]]
-    image_todo = [r for r in todo if r["has_image"]]
-
-    stats = {"official": 0, "inferred": 0, "needs_review": 0, "failed": 0}
-
-    async def generate(prompt: str, multimodal_rec: dict | None) -> str:
-        image_fs = _rec_image_fs(multimodal_rec) if multimodal_rec else None
-        if backend == "ollama":
-            return await ollama_generate(prompt, image_fs, model=model)
-        contents = [prompt, *(_image_parts(multimodal_rec) if multimodal_rec else [])]
-        return await pool.generate(contents, system_instruction=SYSTEM_INSTRUCTION)
-
-    async def process_batch(batch_recs: list[dict], multimodal: bool) -> None:
-        # Resolve grade/unit/context locally first (free).
-        for rec in batch_recs:
-            rec["_ctx"] = await resolve_grade_unit_context(retriever, rec)
-        try:
-            if multimodal:
-                rec = batch_recs[0]
-                text = await generate(build_single_prompt(rec, rec["_ctx"]), rec)
-                results = _parse_results(text)
-                if not results:
-                    logger.warning("Empty multimodal parse for %s; raw=%r",
-                                   rec["content_hash"][:8], (text or "")[:300])
-                results = [{**(results[0] if results else {}), "index": 0}]
-            else:
-                items = [{"index": i, "rec": r, "context": r["_ctx"]} for i, r in enumerate(batch_recs)]
-                text = await generate(build_text_batch_prompt(items), None)
-                results = _parse_results(text)
-        except Exception as e:  # noqa: BLE001
-            logger.error("%s batch failed (%d q): %s", backend, len(batch_recs), e)
-            stats["failed"] += len(batch_recs)
-            return
-
-        # gemma4 occasionally emits a malformed element (e.g. a bare string) inside
-        # results — skip non-dicts so one bad batch never kills the run.
-        by_index = {}
-        for r in results:
-            if isinstance(r, dict) and "index" in r:
-                try:
-                    by_index[int(r["index"])] = r
-                except (ValueError, TypeError):
-                    pass
-        rows = []
-        for i, rec in enumerate(batch_recs):
-            enr = by_index.get(i)
-            if not enr:
-                stats["failed"] += 1
-                continue
-            built = build_row(rec, enr)
-            if not built["_structurally_ok"]:
-                logger.warning("Structurally invalid for %s: ans=%r expl=%d enr_keys=%s",
-                               rec["content_hash"][:8], built["row"]["correct_answer"],
-                               len(built["row"]["correct_explanations"]), list(enr.keys()))
-                stats["failed"] += 1
-                continue
-            row = built["row"]
-            rows.append(row)
-            stats["official" if row["answer_source"] == "official" else "inferred"] += 1
-            if row["needs_review"]:
-                stats["needs_review"] += 1
-        try:
-            await upsert_rows(rows)  # atomic per batch
-        except Exception as e:  # noqa: BLE001 — a bad row must not kill the run; resume retries it
-            logger.error("Upsert failed for %d rows (%s); skipping batch: %s",
-                         len(rows), [r["content_hash"][:8] for r in rows], e)
-            # undo the optimistic stats bump for this uncommitted batch
-            for row in rows:
-                stats["official" if row["answer_source"] == "official" else "inferred"] -= 1
-                if row["needs_review"]:
-                    stats["needs_review"] -= 1
-            stats["failed"] += len(rows)
-
-    columns = [
-        SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
-        BarColumn(), MofNCompleteColumn(), TextColumn("·"),
-        TimeElapsedColumn(), TextColumn("eta"), TimeRemainingColumn(),
-    ]
-    def backend_status() -> str:
-        return pool.status_line() if pool else f"ollama:{model}"
-
-    total = len(text_todo) + len(image_todo)
-    processed = 0
-    with Progress(*columns, console=console) as progress:
-        task = progress.add_task("Enriching", total=total)
-
-        # Text questions in batches.
-        for i in range(0, len(text_todo), batch_size):
-            batch = text_todo[i:i + batch_size]
-            await process_batch(batch, multimodal=False)
-            processed += len(batch)
-            progress.update(task, advance=len(batch), description=f"text · {backend_status()}")
-            write_checkpoint({
-                "total": total, "done_now": processed, "already_done": len(done),
-                "remaining": total - processed, "last_content_hash": batch[-1]["content_hash"],
-                "stats": stats, "backend": backend_status(),
-            })
-
-        # Image questions one at a time (multimodal).
-        for rec in image_todo:
-            await process_batch([rec], multimodal=True)
-            processed += 1
-            progress.update(task, advance=1, description=f"image · {backend_status()}")
-            write_checkpoint({
-                "total": total, "done_now": processed, "already_done": len(done),
-                "remaining": total - processed, "last_content_hash": rec["content_hash"],
-                "stats": stats, "backend": backend_status(),
-            })
-
-    calls = f" · Gemini calls={pool.total_calls()}" if pool else ""
-    console.print(f"\n[green bold]Done.[/green bold] official={stats['official']} "
-                  f"inferred={stats['inferred']} needs_review={stats['needs_review']} "
-                  f"failed={stats['failed']}{calls}")
+    if stage in ("generate", "all"):
+        await generate_stage(subject_filter, limit, image_model, concurrency)
+    if stage in ("validate", "all"):
+        await validate_stage(judge_model, limit)
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Enrich scraped exam questions into exam_questions.")
+    ap.add_argument("--stage", choices=["generate", "validate", "all"], default="all",
+                    help="generate (DeepSeek text + gemma image), validate (gemini judge), or all")
     ap.add_argument("--subject", help="Canonical subject filter, e.g. biology, maths, sat")
     ap.add_argument("--limit", type=int, help="Cap number of questions (dry-run)")
-    ap.add_argument("--batch-size", type=int, default=10, help="Text questions per generate call")
-    ap.add_argument("--backend", choices=["ollama", "gemini"], default="ollama",
-                    help="ollama (local gemma4, default) or gemini (cloud key pool)")
-    ap.add_argument("--model", help="Override model (default: gemma4:latest for ollama, "
-                                    "gemini-2.5-flash for gemini)")
+    ap.add_argument("--image-model", default="gemma4:latest", help="Ollama vision model for image questions")
+    ap.add_argument("--judge-model", default="gemini-2.5-flash", help="Gemini validation model")
+    ap.add_argument("--concurrency", type=int, default=20, help="Parallel DeepSeek text calls")
     ap.add_argument("--reset", action="store_true", help="Wipe exam_questions before running")
     args = ap.parse_args()
-    model = args.model or ("gemma4:12b" if args.backend == "ollama" else "gemini-2.5-flash")
-    asyncio.run(run(args.subject, args.limit, args.batch_size, model, args.reset, args.backend))
+    asyncio.run(run(args.stage, args.subject, args.limit, args.image_model,
+                    args.judge_model, args.concurrency, args.reset))
 
 
 if __name__ == "__main__":

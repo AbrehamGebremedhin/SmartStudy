@@ -136,6 +136,10 @@ class ExamQuestion(Base):
     workout_steps: Mapped[str | None] = mapped_column(Text, nullable=True)
     difficulty: Mapped[str] = mapped_column(String, nullable=False, default="medium")
 
+    # Stage-2 gemini validation. NULL = not yet validated.
+    validation_score: Mapped[int | None] = mapped_column(Integer, nullable=True)   # explanation depth 1–5
+    answer_agreed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)     # gemini agrees with the answer
+
     needs_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
