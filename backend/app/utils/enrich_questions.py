@@ -765,46 +765,59 @@ async def validate_stage(judge_model: str, limit: int | None) -> None:
         return
 
     stats = {"agree": 0, "disagree": 0, "low_depth": 0}
-    with _progress() as progress:
-        task = progress.add_task("Validating (gemini)", total=len(items))
-        for i in range(0, len(items), JUDGE_BATCH):
-            batch = items[i:i + JUDGE_BATCH]
-            jbatch = [{"index": j, **b} for j, b in enumerate(batch)]
+    batches = [items[i:i + JUDGE_BATCH] for i in range(0, len(items), JUDGE_BATCH)]
+    # One in-flight batch per key — the pool rotates keys, so each key sees ~1 call
+    # at a time (well under its RPM); no manual pacing needed.
+    concurrency = max(2, len(settings.gemini_api_keys))
+    sem = asyncio.Semaphore(concurrency)
+    n = {"done": 0}
+
+    async def judge(batch, progress, task):
+        jbatch = [{"index": j, **b} for j, b in enumerate(batch)]
+        async with sem:
             try:
                 text = await pool.generate(build_judge_prompt(jbatch), system_instruction=JUDGE_SYSTEM)
                 verdicts = {int(v["index"]): v for v in _parse_results(text)
                             if isinstance(v, dict) and "index" in v}
-            except Exception as e:  # noqa: BLE001 — a failed judge batch leaves rows unvalidated; rerun picks them up
+            except Exception as e:  # noqa: BLE001 — failed batch leaves rows unvalidated; rerun picks them up
                 logger.error("judge batch failed: %s", e)
                 verdicts = {}
 
-            updates = []
-            for j, b in enumerate(batch):
-                v = verdicts.get(j)
-                if not v:
-                    continue
-                judged = to_letter(v.get("your_answer"), b["options"])
-                agrees = (judged == b["correct_answer"]) if judged else bool(v.get("answer_agrees"))
-                try:
-                    depth = int(v.get("depth_score") or 0)
-                except (ValueError, TypeError):
-                    depth = 0
-                needs_review = b["needs_review"] or (not agrees) or depth < 3
-                updates.append((b["id"], depth, agrees, needs_review))
-                stats["agree" if agrees else "disagree"] += 1
-                if depth < 3:
-                    stats["low_depth"] += 1
+        updates = []
+        for j, b in enumerate(batch):
+            v = verdicts.get(j)
+            if not v:
+                continue
+            judged = to_letter(v.get("your_answer"), b["options"])
+            agrees = (judged == b["correct_answer"]) if judged else bool(v.get("answer_agrees"))
+            try:
+                depth = int(v.get("depth_score") or 0)
+            except (ValueError, TypeError):
+                depth = 0
+            needs_review = b["needs_review"] or (not agrees) or depth < 3
+            updates.append((b["id"], depth, agrees, needs_review))
+            stats["agree" if agrees else "disagree"] += 1
+            if depth < 3:
+                stats["low_depth"] += 1
 
-            if updates:
-                async with AsyncSessionLocal() as db:
-                    for rid, depth, agrees, nr in updates:
-                        await db.execute(update(ExamQuestion).where(ExamQuestion.id == rid)
-                                         .values(validation_score=depth, answer_agreed=agrees, needs_review=nr))
-                    await db.commit()
-            progress.update(task, advance=len(batch), description=f"judge · {pool.status_line()}")
-            write_checkpoint({"stage": "validate", "total": len(items),
-                              "done_now": min(i + JUDGE_BATCH, len(items)), "stats": stats,
-                              "keys": pool.status_line()})
+        if updates:
+            async with AsyncSessionLocal() as db:
+                for rid, depth, agrees, nr in updates:
+                    await db.execute(update(ExamQuestion).where(ExamQuestion.id == rid)
+                                     .values(validation_score=depth, answer_agreed=agrees, needs_review=nr))
+                await db.commit()
+        n["done"] += len(batch)
+        progress.update(task, advance=len(batch), description=f"judge · {pool.status_line()}")
+        if n["done"] % (JUDGE_BATCH * concurrency) < JUDGE_BATCH:
+            write_checkpoint({"stage": "validate", "total": len(items), "done_now": n["done"],
+                              "stats": stats, "keys": pool.status_line()})
+
+    with _progress() as progress:
+        task = progress.add_task("Validating (gemini)", total=len(items))
+        await asyncio.gather(*(judge(b, progress, task) for b in batches))
+
+    write_checkpoint({"stage": "validate", "total": len(items), "done_now": n["done"],
+                      "stats": stats, "keys": pool.status_line()})
     console.print(f"[green bold]Validate done.[/green bold] {stats} · Gemini calls={pool.total_calls()}")
 
 

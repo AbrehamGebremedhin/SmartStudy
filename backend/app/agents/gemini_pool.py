@@ -76,19 +76,29 @@ class _KeyState:
 
 
 class GeminiKeyPool:
-    def __init__(self, api_keys: list[str], model: str = DEFAULT_MODEL):
+    def __init__(self, api_keys: list[str], model: str = DEFAULT_MODEL,
+                 target_rpm_per_key: float = 10.0):
         if not api_keys:
             raise ValueError("GeminiKeyPool requires at least one API key")
         self.model = model
         self.states = [_KeyState(i, k) for i, k in enumerate(api_keys)]
         self._rr = 0
         self._lock = asyncio.Lock()
-        logger.info("GeminiKeyPool: %d key(s), model=%s", len(self.states), model)
+        # Per-key pacer: after handing out a key, hold it for this interval so no single
+        # key is dispatched faster than target_rpm_per_key. Load naturally spreads only
+        # to keys that are free, so cooling keys don't push others over the RPM limit.
+        self._per_key_interval = 60.0 / target_rpm_per_key
+        logger.info("GeminiKeyPool: %d key(s), model=%s, per-key pace=%.1fs (%.0f rpm/key)",
+                    len(self.states), model, self._per_key_interval, target_rpm_per_key)
 
     # -- key selection ---------------------------------------------------------
 
     async def _acquire(self) -> _KeyState:
-        """Return the next available key, sleeping (and logging) if none are ready."""
+        """Return the next available key, sleeping (and logging) if none are ready.
+
+        Enforces a global min-interval between dispatches so concurrent callers don't
+        burst past the free-tier RPM.
+        """
         while True:
             async with self._lock:
                 now = time.time()
@@ -97,6 +107,8 @@ class GeminiKeyPool:
                     s = self.states[(self._rr + step) % n]
                     if s.available_at() <= now:
                         self._rr = (self._rr + step + 1) % n
+                        # Soft per-key pace (max() so a real 429 cooldown still wins).
+                        s.cooling_until = max(s.cooling_until, now + self._per_key_interval)
                         return s
                 soonest = min(s.available_at() for s in self.states)
             wait = max(1.0, soonest - time.time())
