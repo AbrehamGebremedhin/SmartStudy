@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
 
-from app.api.routes import auth, chat, evaluation, flashcards, history, mcq, notes, ws
+from app.api.routes import auth, chat, evaluation, exam, flashcards, history, mcq, notes, ws
 from app.config import settings
 from app.core.exceptions import OutOfContextError
 from app.db.database import Base, engine, get_db
@@ -135,6 +135,7 @@ app.include_router(notes.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(history.router, prefix="/api")
 app.include_router(evaluation.router, prefix="/api")
+app.include_router(exam.router, prefix="/api")
 app.include_router(ws.router, prefix="/api")
 
 

@@ -8,6 +8,7 @@ import GamifyLayer from './components/ui/GamifyLayer'
 import Login from './pages/Login'
 import Home from './pages/Home'
 import MCQ from './pages/MCQ'
+import PastExams from './pages/PastExams'
 import Flashcards from './pages/Flashcards'
 import Notes from './pages/Notes'
 import Chat from './pages/Chat'
@@ -22,6 +23,7 @@ function AppShell() {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/mcq" element={<MCQ />} />
+          <Route path="/past-exams" element={<PastExams />} />
           <Route path="/flashcards" element={<Flashcards />} />
           <Route path="/notes" element={<Notes />} />
           <Route path="/chat" element={<Chat />} />

@@ -1,11 +1,12 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.db.models import ChatMessage, ChatSession, Generation, SecurityEvent, User, UserGeneration
+from app.db.models import (ChatMessage, ChatSession, ExamQuestion, Generation, SecurityEvent,
+                           User, UserGeneration)
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +65,58 @@ async def get_pooled_items(
     for gen in result.scalars().all():
         items.extend(gen.content.get(item_key, []))
     return items
+
+
+# ---------------------------------------------------------------------------
+# Past-exam questions (Past Exams practice mode)
+# ---------------------------------------------------------------------------
+
+async def get_exam_subjects(db: AsyncSession) -> list[tuple[str, int]]:
+    """Subjects that have enriched exam questions, with counts."""
+    result = await db.execute(
+        select(ExamQuestion.subject, func.count(ExamQuestion.id))
+        .where(ExamQuestion.correct_answer.isnot(None))
+        .group_by(ExamQuestion.subject)
+        .order_by(ExamQuestion.subject)
+    )
+    return [(s, n) for s, n in result.all()]
+
+
+async def get_exam_years(db: AsyncSession, subject: str) -> list[str]:
+    """Distinct non-empty years available for a subject (newest first)."""
+    result = await db.execute(
+        select(ExamQuestion.year)
+        .where(ExamQuestion.subject == subject, ExamQuestion.year.isnot(None),
+               ExamQuestion.year != "")
+        .distinct()
+        .order_by(ExamQuestion.year.desc())
+    )
+    return [y for (y,) in result.all()]
+
+
+async def get_exam_questions(
+    db: AsyncSession,
+    subject: str,
+    year: str | None = None,
+    grade: int | None = None,
+    unit: str | None = None,
+    limit: int = 20,
+    include_review: bool = False,
+) -> list[ExamQuestion]:
+    """Random sample of enriched exam questions matching the filters."""
+    conds = [ExamQuestion.subject == subject, ExamQuestion.correct_answer.isnot(None)]
+    if year:
+        conds.append(ExamQuestion.year == year)
+    if grade is not None:
+        conds.append(ExamQuestion.grade == grade)
+    if unit is not None:
+        conds.append(ExamQuestion.unit == unit)
+    if not include_review:
+        conds.append(ExamQuestion.needs_review.is_(False))
+    result = await db.execute(
+        select(ExamQuestion).where(*conds).order_by(func.random()).limit(limit)
+    )
+    return list(result.scalars().all())
 
 
 async def save_generation(

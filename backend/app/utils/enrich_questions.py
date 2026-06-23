@@ -413,11 +413,13 @@ async def ollama_generate(prompt: str, image_fs: list[str] | None, model: str,
 
 # ── DeepSeek backend (cloud, text-only, parallel) ──────────────────────────────
 
-def make_deepseek_llm():
+def make_deepseek_llm(model: str = "deepseek-v4-flash", temperature: float = 0.0):
     from langchain_deepseek import ChatDeepSeek
     # temperature 0: DeepSeek's own guidance for factual/maths work — maximizes accuracy.
-    llm = ChatDeepSeek(model="deepseek-v4-flash", api_key=settings.deepseek_api_key,
-                       temperature=0, max_retries=3)
+    # The fix stage uses deepseek-v4-pro at a small temperature so it can move off a
+    # disputed answer instead of deterministically repeating it.
+    llm = ChatDeepSeek(model=model, api_key=settings.deepseek_api_key,
+                       temperature=temperature, max_retries=3)
     return llm.bind(response_format={"type": "json_object"})
 
 
@@ -821,6 +823,103 @@ async def validate_stage(judge_model: str, limit: int | None) -> None:
     console.print(f"[green bold]Validate done.[/green bold] {stats} · Gemini calls={pool.total_calls()}")
 
 
+# ── Stage 3: fix flagged rows (re-solve with deepseek-v4-pro, re-judge) ──────────
+
+FIX_MODEL = "deepseek-v4-pro"
+
+
+def _url_to_fs(url: str | None) -> str | None:
+    if not url or "/static/exam-images/" not in url:
+        return None
+    rel = url.split("/static/exam-images/", 1)[1]
+    p = EUEE_DIR / "images" / rel
+    return str(p) if p.exists() else None
+
+
+def _row_to_rec(r: ExamQuestion) -> dict:
+    """Rebuild a generation-style record from a stored ExamQuestion row."""
+    opts = [{"letter": o["letter"], "text": o.get("text"), "image_url": o.get("image_url"),
+             "_image_fs": _url_to_fs(o.get("image_url"))} for o in (r.options or [])]
+    return {
+        "content_hash": r.content_hash, "subject": r.subject, "original_subject": r.original_subject,
+        "stream": r.stream, "year": r.year, "exam_name": r.exam_name, "number": r.number,
+        "grade": r.grade, "unit": r.unit, "question": r.question,
+        "question_image_url": r.question_image_url, "options": opts,
+        "_question_image_fs": _url_to_fs(r.question_image_url),
+        "official_answer": r.correct_answer if r.answer_source == AnswerSource.official.value else None,
+        "has_image": bool(r.question_image_url) or any(o.get("image_url") for o in opts),
+    }
+
+
+def build_fix_prompt(rec: dict, prior_answer: str | None) -> str:
+    base = build_gen_prompt(rec, "")
+    if rec.get("official_answer"):
+        note = (f"\n\nThe official answer is {rec['official_answer']}. Keep it and write thorough, "
+                "step-by-step explanations of why it is correct and why each other option is wrong.")
+    else:
+        note = (f"\n\nIMPORTANT: a previous attempt answered '{prior_answer}', but an independent "
+                "reviewer disputed it. Re-solve this question carefully from first principles, "
+                "double-check which option is truly correct, and give thorough step-by-step explanations.")
+    return base + note
+
+
+async def fix_stage(judge_model: str, limit: int | None = None, concurrency: int = 16) -> None:
+    """Re-solve flagged rows with deepseek-v4-pro (+ gemma for images), then NULL their
+    validation fields so the next `--stage validate` re-judges them independently.
+    Decoupled from gemini so it runs even when the free judge quota is exhausted."""
+    pro = make_deepseek_llm(model=FIX_MODEL, temperature=0.4)
+
+    async with AsyncSessionLocal() as db:
+        q = select(ExamQuestion).where(
+            (ExamQuestion.answer_agreed.is_(False)) | (ExamQuestion.validation_score < 3)
+        )
+        if limit:
+            q = q.limit(limit)
+        rows = (await db.execute(q)).scalars().all()
+        work = [(_row_to_rec(r), r.correct_answer) for r in rows]
+    console.print(f"[bold]Fix: re-solving {len(work)} flagged rows with {FIX_MODEL} "
+                  f"(re-judge happens on the next validate pass)[/bold]")
+    if not work:
+        return
+
+    stats = {"resolved": 0, "failed": 0}
+    sem = asyncio.Semaphore(concurrency)
+    n = {"done": 0}
+
+    async def fix_one(rec, prior, progress, task):
+        async with sem:
+            try:
+                prompt = build_fix_prompt(rec, prior)
+                if rec["has_image"]:
+                    text = await ollama_generate(prompt, _rec_image_fs(rec), model="gemma4:latest", think=True)
+                else:
+                    text = await deepseek_generate(pro, prompt)
+                row = build_row(rec, _parse_one(text))["row"]
+                if rec.get("official_answer"):
+                    row["correct_answer"] = rec["official_answer"]
+                    row["answer_source"] = AnswerSource.official.value
+                if not row["correct_answer"]:
+                    stats["failed"] += 1
+                    return
+                # Clear validation so the next validate pass re-judges this fresh attempt.
+                row["validation_score"] = None
+                row["answer_agreed"] = None
+                row["needs_review"] = False
+                await upsert_rows([row])
+                stats["resolved"] += 1
+            except Exception as e:  # noqa: BLE001
+                logger.error("fix failed %s: %s", rec["content_hash"][:8], e)
+                stats["failed"] += 1
+            finally:
+                n["done"] += 1
+                progress.update(task, advance=1, description=f"fix · {stats}")
+
+    with _progress() as progress:
+        task = progress.add_task("Fixing flagged (deepseek-v4-pro)", total=len(work))
+        await asyncio.gather(*(fix_one(rec, prior, progress, task) for rec, prior in work))
+    console.print(f"[green bold]Fix done.[/green bold] {stats} · re-judge with: --stage validate")
+
+
 # ── Dispatcher ──────────────────────────────────────────────────────────────────
 
 async def run(stage: str, subject_filter: str | None, limit: int | None,
@@ -834,16 +933,20 @@ async def run(stage: str, subject_filter: str | None, limit: int | None,
         await generate_stage(subject_filter, limit, image_model, concurrency)
     if stage in ("validate", "all"):
         await validate_stage(judge_model, limit)
+    if stage == "fix":
+        await fix_stage(judge_model, limit)
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Enrich scraped exam questions into exam_questions.")
-    ap.add_argument("--stage", choices=["generate", "validate", "all"], default="all",
-                    help="generate (DeepSeek text + gemma image), validate (gemini judge), or all")
+    ap.add_argument("--stage", choices=["generate", "validate", "fix", "all"], default="all",
+                    help="generate (DeepSeek+gemma), validate (gemini judge), "
+                         "fix (re-solve flagged with deepseek-v4-pro + re-judge), or all")
     ap.add_argument("--subject", help="Canonical subject filter, e.g. biology, maths, sat")
     ap.add_argument("--limit", type=int, help="Cap number of questions (dry-run)")
     ap.add_argument("--image-model", default="gemma4:latest", help="Ollama vision model for image questions")
-    ap.add_argument("--judge-model", default="gemini-2.5-flash", help="Gemini validation model")
+    ap.add_argument("--judge-model", default="gemini-2.5-flash-lite",
+                    help="Gemini validation model (flash-lite has higher free quota/RPM)")
     ap.add_argument("--concurrency", type=int, default=20, help="Parallel DeepSeek text calls")
     ap.add_argument("--reset", action="store_true", help="Wipe exam_questions before running")
     args = ap.parse_args()
