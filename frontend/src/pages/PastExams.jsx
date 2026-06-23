@@ -19,6 +19,7 @@ export default function PastExams() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [xpEarned, setXpEarned] = useState(0)
+  const [hovered, setHovered] = useState(null) // { qi, letter }
 
   // Load available subjects once.
   useEffect(() => {
@@ -157,16 +158,26 @@ export default function PastExams() {
                   {q.options.map(opt => {
                     const isCorrect = opt.letter === correct
                     const isSelected = opt.letter === userAnswer
+                    const tooltipText = isRevealed && !isCorrect
+                      ? q.incorrect_explanations?.[opt.letter]
+                      : null
+                    const showTooltip = tooltipText &&
+                      hovered?.qi === qi && hovered?.letter === opt.letter
                     let cls = 'mcq-opt'
                     if (isRevealed && isCorrect) cls += ' ok'
                     else if (isRevealed && isSelected && !isCorrect) cls += ' no'
                     return (
-                      <button key={opt.letter} className={cls} onClick={() => pick(qi, opt.letter)}>
-                        <span className="o-let">{opt.letter}</span>
-                        {opt.image_url
-                          ? <img className="opt-img" src={opt.image_url} alt={`option ${opt.letter}`} loading="lazy" />
-                          : <span>{opt.text}</span>}
-                      </button>
+                      <div key={opt.letter} className="opt-wrap">
+                        <button className={cls} onClick={() => pick(qi, opt.letter)}
+                                onMouseEnter={() => tooltipText && setHovered({ qi, letter: opt.letter })}
+                                onMouseLeave={() => setHovered(null)}>
+                          <span className="o-let">{opt.letter}</span>
+                          {opt.image_url
+                            ? <img className="opt-img" src={opt.image_url} alt={`option ${opt.letter}`} loading="lazy" />
+                            : <span>{opt.text}</span>}
+                        </button>
+                        {showTooltip && <div className="opt-tooltip">✗ {tooltipText}</div>}
+                      </div>
                     )
                   })}
                 </div>
