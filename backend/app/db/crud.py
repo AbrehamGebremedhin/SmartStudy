@@ -82,18 +82,6 @@ async def get_exam_subjects(db: AsyncSession) -> list[tuple[str, int]]:
     return [(s, n) for s, n in result.all()]
 
 
-async def get_exam_years(db: AsyncSession, subject: str) -> list[str]:
-    """Distinct non-empty years available for a subject (newest first)."""
-    result = await db.execute(
-        select(ExamQuestion.year)
-        .where(ExamQuestion.subject == subject, ExamQuestion.year.isnot(None),
-               ExamQuestion.year != "")
-        .distinct()
-        .order_by(ExamQuestion.year.desc())
-    )
-    return [y for (y,) in result.all()]
-
-
 async def get_exam_questions(
     db: AsyncSession,
     subject: str,

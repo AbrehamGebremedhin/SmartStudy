@@ -418,8 +418,10 @@ def make_deepseek_llm(model: str = "deepseek-v4-flash", temperature: float = 0.0
     # temperature 0: DeepSeek's own guidance for factual/maths work — maximizes accuracy.
     # The fix stage uses deepseek-v4-pro at a small temperature so it can move off a
     # disputed answer instead of deterministically repeating it.
+    # Generous timeout: deepseek-v4-pro reasons longer and times out on hard questions
+    # at the default. 300s comfortably covers the slowest pro responses.
     llm = ChatDeepSeek(model=model, api_key=settings.deepseek_api_key,
-                       temperature=temperature, max_retries=3)
+                       temperature=temperature, max_retries=3, timeout=300)
     return llm.bind(response_format={"type": "json_object"})
 
 

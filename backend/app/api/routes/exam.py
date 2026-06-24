@@ -7,7 +7,24 @@ from app.db.database import get_db
 from app.db.models import ExamQuestion, User
 from app.security.rate_limiter import limiter
 
-router = APIRouter(prefix="/exam", tags=["Past Exams"])
+router = APIRouter(prefix="/exam", tags=["Mock Exam"])
+
+# Per-subject mock-exam spec: (question_count, minutes). Counts are the median size of a
+# real EUEE single-subject paper in the scraped data; minutes approximate EUEE timing
+# (~1.2 min/q, more for calculation-heavy maths/physics/chemistry).
+EXAM_SPECS: dict[str, tuple[int, int]] = {
+    "biology":   (100, 120),
+    "chemistry": (80, 110),
+    "physics":   (55, 90),
+    "maths":     (65, 100),
+    "english":   (100, 120),
+    "civics":    (100, 110),
+    "economics": (80, 90),
+    "geography": (100, 110),
+    "history":   (100, 110),
+    "sat":       (60, 80),
+}
+DEFAULT_SPEC = (50, 75)
 
 
 def _serialize(q: ExamQuestion) -> dict:
@@ -40,18 +57,11 @@ async def list_subjects(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     rows = await crud.get_exam_subjects(db)
-    return {"subjects": [{"subject": s, "count": n} for s, n in rows]}
-
-
-@router.get("/{subject}/years")
-@limiter.limit("120/minute")
-async def list_years(
-    request: Request,
-    subject: str,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    return {"years": await crud.get_exam_years(db, subject.lower())}
+    out = []
+    for s, _n in rows:
+        q, mins = EXAM_SPECS.get(s, DEFAULT_SPEC)
+        out.append({"subject": s, "num_questions": q, "minutes": mins})
+    return {"subjects": out}
 
 
 @router.get("/practice")
@@ -62,13 +72,16 @@ async def practice(
     year: str | None = None,
     grade: int | None = None,
     unit: str | None = None,
-    limit: int = Query(20, ge=1, le=50),
+    limit: int | None = Query(None, ge=1, le=200),
     include_review: bool = False,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    subj = subject.lower()
+    spec_q, spec_min = EXAM_SPECS.get(subj, DEFAULT_SPEC)
     questions = await crud.get_exam_questions(
-        db, subject.lower(), year=year, grade=grade, unit=unit,
-        limit=limit, include_review=include_review,
+        db, subj, year=year, grade=grade, unit=unit,
+        limit=limit or spec_q, include_review=include_review,
     )
-    return {"questions": [_serialize(q) for q in questions]}
+    return {"questions": [_serialize(q) for q in questions],
+            "num_questions": spec_q, "minutes": spec_min}

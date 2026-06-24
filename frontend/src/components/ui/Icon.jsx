@@ -23,6 +23,12 @@ const PATHS = {
       <path d="M8.3 12.4l2.5 2.5 5-5.3" />
     </>
   ),
+  clock: (
+    <>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 7.5V12l3 2" />
+    </>
+  ),
   cards: (
     <>
       <rect x="8" y="3.5" width="12.5" height="12.5" rx="2.5" />

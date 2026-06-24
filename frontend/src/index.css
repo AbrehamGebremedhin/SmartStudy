@@ -744,6 +744,48 @@ select:focus, input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px rg
 }
 .mcq-opt.ok .o-let { background: var(--highland); color: white; }
 .mcq-opt.no .o-let { background: var(--vermillion); color: white; }
+
+/* ── Mock exam ── */
+.mcq-opt.sel { border-color: var(--ochre); background: rgba(196,132,29,0.08); }
+.mcq-opt.sel .o-let { background: var(--ochre); color: white; }
+
+.exam-spec {
+  display: flex; gap: 18px; justify-content: center;
+  margin: 14px 0; color: var(--ink-2); font-size: 14px; font-weight: 600;
+}
+.exam-spec span { display: inline-flex; align-items: center; gap: 6px; }
+
+.exam-bar {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; gap: 14px;
+  padding: 10px 14px; margin-bottom: 14px;
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--r-s);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+.exam-timer {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-weight: 800; font-variant-numeric: tabular-nums; font-size: 16px; color: var(--ink);
+}
+.exam-timer.low { color: var(--vermillion); }
+.exam-prog { color: var(--ink-2); font-size: 13px; margin-left: auto; }
+
+.q-mark { font-weight: 800; font-size: 15px; }
+.q-mark.ok { color: var(--highland); }
+.q-mark.no { color: var(--vermillion); }
+
+.weak-areas {
+  margin-top: 16px; padding: 16px;
+  border: 1px solid var(--border); border-radius: var(--r-s); background: var(--card);
+}
+.weak-title { display: inline-flex; align-items: center; gap: 8px; font-weight: 800; }
+.weak-sub { color: var(--ink-2); font-size: 13px; margin: 4px 0 10px; }
+.weak-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.weak-list li {
+  display: flex; justify-content: space-between; gap: 12px;
+  padding: 8px 12px; background: var(--sandstone); border-radius: var(--r-s); font-size: 14px;
+}
+.weak-count { color: var(--vermillion); font-weight: 700; white-space: nowrap; }
+.weak-loc { color: var(--ink-2); font-size: 12px; }
 .mcq-expl {
   margin-top: 14px;
   padding: 14px 16px;

@@ -8,7 +8,7 @@ import { getLevelInfo } from '../../lib/gamification'
 const NAV_ITEMS = [
   { to: '/', label: 'Home', icon: 'home', end: true },
   { to: '/mcq', label: 'MCQ Quiz', icon: 'quiz' },
-  { to: '/past-exams', label: 'Past Exams', icon: 'file-text' },
+  { to: '/mock-exam', label: 'Mock Exam', icon: 'file-text' },
   { to: '/flashcards', label: 'Flashcards', icon: 'cards' },
   { to: '/notes', label: 'Study Notes', icon: 'notes' },
   { to: '/chat', label: 'AI Tutor', icon: 'tutor' },
