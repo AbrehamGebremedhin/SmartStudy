@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -19,12 +20,16 @@ async def get_or_create_user(db: AsyncSession, clerk_id: str, email: str) -> tup
     user = result.scalar_one_or_none()
 
     if user is None:
-        user = User(google_id=clerk_id, email=email)
-        db.add(user)
-        await db.flush()
+        # Two concurrent first-logins of the same id both see None and race to
+        # INSERT. Let the DB arbitrate: the loser's row is skipped (no exception)
+        # and `created` reflects who actually inserted (rowcount 1 vs 0).
+        ins = await db.execute(
+            pg_insert(User).values(google_id=clerk_id, email=email)
+            .on_conflict_do_nothing(index_elements=["google_id"])
+        )
         await db.commit()
-        await db.refresh(user)
-        return user, True
+        user = (await db.execute(select(User).where(User.google_id == clerk_id))).scalar_one()
+        return user, ins.rowcount == 1
 
     user.last_seen_at = datetime.now(timezone.utc)
     user.email = email

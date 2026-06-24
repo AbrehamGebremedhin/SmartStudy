@@ -3,9 +3,11 @@ Integration tests for user CRUD operations.
 
 Uses a real PostgreSQL database (testcontainers).
 """
+import asyncio
 import uuid
 
 import pytest
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import crud
@@ -56,3 +58,19 @@ class TestGetOrCreateUser:
         u1, _ = await crud.get_or_create_user(db_session, clerk_id="gid-aaa", email="a@x.com")
         u2, _ = await crud.get_or_create_user(db_session, clerk_id="gid-bbb", email="b@x.com")
         assert u1.id != u2.id
+
+    async def test_concurrent_first_logins_dont_raise(self, TestSessionLocal):
+        """Many simultaneous first-logins of the same new id: no UniqueViolation,
+        exactly one row, and exactly one caller reports created=True."""
+        gid = f"google-{uuid.uuid4().hex[:8]}"
+
+        async def call():
+            async with TestSessionLocal() as s:
+                return await crud.get_or_create_user(s, clerk_id=gid, email="race@example.com")
+
+        results = await asyncio.gather(*(call() for _ in range(8)))
+
+        assert sum(created for _, created in results) == 1
+        async with TestSessionLocal() as s:
+            n = (await s.execute(select(func.count()).select_from(User).where(User.google_id == gid))).scalar()
+        assert n == 1
