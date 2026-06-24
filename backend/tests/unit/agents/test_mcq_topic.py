@@ -15,10 +15,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "app" / "agents"))
 @pytest.fixture
 def agent():
     with (
-        patch("GenerationAgent.ContextRefinementAgent"),
-        patch("GenerationAgent.ValidationAgent"),
-        patch("GenerationAgent.SessionManager"),
-        patch("GenerationAgent.ChatDeepSeek"),
+        patch("base.ContextRefinementAgent"),
+        patch("base.ValidationAgent"),
+        patch("base.SessionManager"),
+        patch("base.ChatDeepSeek"),
     ):
         from GenerationAgent import GenerationAgent
         instance = GenerationAgent.__new__(GenerationAgent)
@@ -40,15 +40,15 @@ async def test_topic_calls_query_db_directly(agent):
         return_value={"needs_replacement": False, "valid_mcqs": [], "invalid_indices": []}
     )
 
-    with patch("GenerationAgent.get_subject_rules", return_value=""), \
-         patch("GenerationAgent.get_mcq_subject_guidance", return_value=""), \
-         patch("GenerationAgent.get_grounding_rule", return_value=""), \
-         patch("GenerationAgent.format_docs", return_value=""), \
-         patch("GenerationAgent.PromptTemplate") as mock_pt, \
-         patch("GenerationAgent.StrOutputParser"):
+    with patch("mcq.get_subject_rules", return_value=""), \
+         patch("mcq.get_mcq_subject_guidance", return_value=""), \
+         patch("mcq.get_grounding_rule", return_value=""), \
+         patch("mcq.format_docs", return_value=""), \
+         patch("mcq.ChatPromptTemplate") as mock_pt, \
+         patch("mcq.StrOutputParser"):
         mock_chain = AsyncMock()
         mock_chain.ainvoke = AsyncMock(return_value='{"questions": []}')
-        mock_pt.from_template.return_value.__or__ = MagicMock(return_value=mock_chain)
+        mock_pt.from_messages.return_value.__or__ = MagicMock(return_value=mock_chain)
 
         await agent.generate_mcqs(
             subject="biology", grade=None, unit=None,
@@ -74,15 +74,15 @@ async def test_no_topic_calls_retrieve_mcq_context(agent):
         return_value={"needs_replacement": False, "valid_mcqs": [], "invalid_indices": []}
     )
 
-    with patch("GenerationAgent.get_subject_rules", return_value=""), \
-         patch("GenerationAgent.get_mcq_subject_guidance", return_value=""), \
-         patch("GenerationAgent.get_grounding_rule", return_value=""), \
-         patch("GenerationAgent.format_docs", return_value=""), \
-         patch("GenerationAgent.PromptTemplate") as mock_pt, \
-         patch("GenerationAgent.StrOutputParser"):
+    with patch("mcq.get_subject_rules", return_value=""), \
+         patch("mcq.get_mcq_subject_guidance", return_value=""), \
+         patch("mcq.get_grounding_rule", return_value=""), \
+         patch("mcq.format_docs", return_value=""), \
+         patch("mcq.ChatPromptTemplate") as mock_pt, \
+         patch("mcq.StrOutputParser"):
         mock_chain = AsyncMock()
         mock_chain.ainvoke = AsyncMock(return_value='{"questions": []}')
-        mock_pt.from_template.return_value.__or__ = MagicMock(return_value=mock_chain)
+        mock_pt.from_messages.return_value.__or__ = MagicMock(return_value=mock_chain)
 
         await agent.generate_mcqs(
             subject="biology", grade=11, unit="2",
@@ -104,15 +104,15 @@ async def test_topic_query_string_contains_difficulty(agent):
         return_value={"needs_replacement": False, "valid_mcqs": [], "invalid_indices": []}
     )
 
-    with patch("GenerationAgent.get_subject_rules", return_value=""), \
-         patch("GenerationAgent.get_mcq_subject_guidance", return_value=""), \
-         patch("GenerationAgent.get_grounding_rule", return_value=""), \
-         patch("GenerationAgent.format_docs", return_value=""), \
-         patch("GenerationAgent.PromptTemplate") as mock_pt, \
-         patch("GenerationAgent.StrOutputParser"):
+    with patch("mcq.get_subject_rules", return_value=""), \
+         patch("mcq.get_mcq_subject_guidance", return_value=""), \
+         patch("mcq.get_grounding_rule", return_value=""), \
+         patch("mcq.format_docs", return_value=""), \
+         patch("mcq.ChatPromptTemplate") as mock_pt, \
+         patch("mcq.StrOutputParser"):
         mock_chain = AsyncMock()
         mock_chain.ainvoke = AsyncMock(return_value='{"questions": []}')
-        mock_pt.from_template.return_value.__or__ = MagicMock(return_value=mock_chain)
+        mock_pt.from_messages.return_value.__or__ = MagicMock(return_value=mock_chain)
 
         await agent.generate_mcqs(
             subject="chemistry", grade=None, unit=None,
