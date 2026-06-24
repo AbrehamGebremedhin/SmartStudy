@@ -11,8 +11,8 @@ from app.core.exceptions import OutOfContextError
 from app.db import crud
 from app.db.database import get_db
 from app.schemas.requests import FlashcardRequest, MCQRequest, NotesRequest
+from app.services import jobs
 from app.services.cache import POOL_FRESH_RATIO, _parse_token_usage, compute_request_hash
-from app.services.generation import run_generate_flashcards, run_generate_mcqs, run_generate_notes
 
 router = APIRouter(prefix="/ws", tags=["WebSocket"])
 
@@ -115,14 +115,14 @@ async def ws_generate_notes(
             chat_context = _format_chat_context(chat_session.messages)
 
         await websocket.send_json(_prog("generating", 3, TOTAL, "Writing your study notes…"))
-        result = await run_generate_notes(
-            subject=body.subject,
-            topic=body.topic,
-            grade=body.grade,
-            unit=body.unit,
-            version=body.version,
-            chat_context=chat_context,
-        )
+        result = await jobs.submit_and_wait("generate_notes", {
+            "subject": body.subject,
+            "topic": body.topic,
+            "grade": body.grade,
+            "unit": body.unit,
+            "version": body.version,
+            "chat_context": chat_context,
+        })
 
         if result.get("error"):
             error_code = result["error"]
@@ -243,11 +243,11 @@ async def ws_generate_mcq(
 
             n = body.num_questions
             await websocket.send_json(_prog("generating", 3, TOTAL, f"Crafting {n} question{'s' if n != 1 else ''}…"))
-            result = await run_generate_mcqs(
-                subject=body.subject, grade=body.grade, unit=body.unit, topic=body.topic,
-                num_questions=body.num_questions, difficulty=body.difficulty,
-                note_content=note_content, chat_context=chat_context,
-            )
+            result = await jobs.submit_and_wait("generate_mcq", {
+                "subject": body.subject, "grade": body.grade, "unit": body.unit, "topic": body.topic,
+                "num_questions": body.num_questions, "difficulty": body.difficulty,
+                "note_content": note_content, "chat_context": chat_context,
+            })
             if result.get("error"):
                 await websocket.send_json({"type": "error", "code": result["error"], "detail": str(result["error"])})
                 await websocket.close()
@@ -303,11 +303,11 @@ async def ws_generate_mcq(
         await websocket.send_json(_prog("loading_context", 2, TOTAL, "Preparing generation…"))
         n = fresh_count
         await websocket.send_json(_prog("generating", 3, TOTAL, f"Crafting {n} new question{'s' if n != 1 else ''}…"))
-        result = await run_generate_mcqs(
-            subject=body.subject, grade=body.grade, unit=body.unit, topic=body.topic,
-            num_questions=fresh_count, difficulty=body.difficulty,
-            note_content=None, chat_context=None,
-        )
+        result = await jobs.submit_and_wait("generate_mcq", {
+            "subject": body.subject, "grade": body.grade, "unit": body.unit, "topic": body.topic,
+            "num_questions": fresh_count, "difficulty": body.difficulty,
+            "note_content": None, "chat_context": None,
+        })
         if result.get("error"):
             await websocket.send_json({"type": "error", "code": result["error"], "detail": str(result["error"])})
             await websocket.close()
@@ -426,11 +426,11 @@ async def ws_generate_flashcards(
 
             n = body.num_cards
             await websocket.send_json(_prog("generating", 3, TOTAL, f"Creating {n} flashcard{'s' if n != 1 else ''}…"))
-            result = await run_generate_flashcards(
-                subject=body.subject, grade=body.grade, unit=body.unit, topic=body.topic,
-                num_cards=body.num_cards, difficulty=body.difficulty,
-                note_content=note_content, chat_context=chat_context,
-            )
+            result = await jobs.submit_and_wait("generate_flashcards", {
+                "subject": body.subject, "grade": body.grade, "unit": body.unit, "topic": body.topic,
+                "num_cards": body.num_cards, "difficulty": body.difficulty,
+                "note_content": note_content, "chat_context": chat_context,
+            })
             if result.get("error"):
                 await websocket.send_json({"type": "error", "code": result["error"], "detail": str(result["error"])})
                 await websocket.close()
@@ -486,11 +486,11 @@ async def ws_generate_flashcards(
         await websocket.send_json(_prog("loading_context", 2, TOTAL, "Preparing generation…"))
         n = fresh_count
         await websocket.send_json(_prog("generating", 3, TOTAL, f"Creating {n} new flashcard{'s' if n != 1 else ''}…"))
-        result = await run_generate_flashcards(
-            subject=body.subject, grade=body.grade, unit=body.unit, topic=body.topic,
-            num_cards=fresh_count, difficulty=body.difficulty,
-            note_content=None, chat_context=None,
-        )
+        result = await jobs.submit_and_wait("generate_flashcards", {
+            "subject": body.subject, "grade": body.grade, "unit": body.unit, "topic": body.topic,
+            "num_cards": fresh_count, "difficulty": body.difficulty,
+            "note_content": None, "chat_context": None,
+        })
         if result.get("error"):
             await websocket.send_json({"type": "error", "code": result["error"], "detail": str(result["error"])})
             await websocket.close()

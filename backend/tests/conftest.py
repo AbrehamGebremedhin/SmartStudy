@@ -14,6 +14,9 @@ os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://dummy:dummy@localhos
 os.environ.setdefault("DEEPSEEK_API_KEY", "sk-test-dummy-key-not-real")
 os.environ.setdefault("GOOGLE_CLIENT_ID", "test-client-id.apps.googleusercontent.com")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-not-real")
+# Don't start the background worker pool inside the test ASGI lifespan — the
+# job-queue tests drive the worker primitives directly and deterministically.
+os.environ.setdefault("JOBS_ENABLED", "false")
 # ────────────────────────────────────────────────────────────────────────────
 
 import pytest

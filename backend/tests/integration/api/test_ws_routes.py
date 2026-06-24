@@ -118,7 +118,7 @@ class TestWsGenerateNotes:
             patch("app.api.routes.ws.crud.get_cached_generation", AsyncMock(return_value=None)),
             patch("app.api.routes.ws.crud.save_generation", AsyncMock(return_value=fake_gen)),
             patch("app.api.routes.ws.crud.link_user_generation", AsyncMock()),
-            patch("app.api.routes.ws.run_generate_notes", AsyncMock(return_value=FIXTURE_NOTES_RESPONSE)),
+            patch("app.api.routes.ws.jobs.submit_and_wait", AsyncMock(return_value=FIXTURE_NOTES_RESPONSE)),
         ):
             with client.websocket_connect("/api/ws/generate/notes?token=test-token") as ws:
                 ws.send_json(NOTES_PAYLOAD)
@@ -138,7 +138,7 @@ class TestWsGenerateNotes:
             patch("app.api.routes.ws.crud.get_cached_generation", AsyncMock(return_value=None)),
             patch("app.api.routes.ws.crud.save_generation", AsyncMock(return_value=fake_gen)),
             patch("app.api.routes.ws.crud.link_user_generation", AsyncMock()),
-            patch("app.api.routes.ws.run_generate_notes", AsyncMock(return_value=FIXTURE_NOTES_RESPONSE)),
+            patch("app.api.routes.ws.jobs.submit_and_wait", AsyncMock(return_value=FIXTURE_NOTES_RESPONSE)),
         ):
             with client.websocket_connect("/api/ws/generate/notes?token=test-token") as ws:
                 ws.send_json(NOTES_PAYLOAD)
@@ -158,7 +158,7 @@ class TestWsGenerateNotes:
             patch("app.api.routes.ws.crud.get_cached_generation", AsyncMock(return_value=None)),
             patch("app.api.routes.ws.crud.save_generation", AsyncMock(return_value=fake_gen)),
             patch("app.api.routes.ws.crud.link_user_generation", AsyncMock()),
-            patch("app.api.routes.ws.run_generate_notes", AsyncMock(return_value=FIXTURE_NOTES_RESPONSE)),
+            patch("app.api.routes.ws.jobs.submit_and_wait", AsyncMock(return_value=FIXTURE_NOTES_RESPONSE)),
         ):
             with client.websocket_connect("/api/ws/generate/notes?token=test-token") as ws:
                 ws.send_json(NOTES_PAYLOAD)
@@ -177,7 +177,7 @@ class TestWsGenerateNotes:
             patch("app.api.routes.ws.crud.get_cached_generation", AsyncMock(return_value=None)),
             patch("app.api.routes.ws.crud.save_generation", AsyncMock(return_value=fake_gen)),
             patch("app.api.routes.ws.crud.link_user_generation", AsyncMock()),
-            patch("app.api.routes.ws.run_generate_notes", AsyncMock(return_value=FIXTURE_NOTES_RESPONSE)),
+            patch("app.api.routes.ws.jobs.submit_and_wait", AsyncMock(return_value=FIXTURE_NOTES_RESPONSE)),
         ):
             with client.websocket_connect("/api/ws/generate/notes?token=test-token") as ws:
                 ws.send_json(NOTES_PAYLOAD)
@@ -197,7 +197,7 @@ class TestWsGenerateNotes:
             patch("app.api.routes.ws._auth_ws", AsyncMock(return_value=fake_user)),
             patch("app.api.routes.ws.crud.get_cached_generation", AsyncMock(return_value=cached_gen)),
             patch("app.api.routes.ws.crud.link_user_generation", AsyncMock()),
-            patch("app.api.routes.ws.run_generate_notes", AsyncMock()) as mock_gen,
+            patch("app.api.routes.ws.jobs.submit_and_wait", AsyncMock()) as mock_gen,
         ):
             with client.websocket_connect("/api/ws/generate/notes?token=test-token") as ws:
                 ws.send_json(NOTES_PAYLOAD)
@@ -229,7 +229,7 @@ class TestWsGenerateNotes:
             patch("app.api.routes.ws._auth_ws", AsyncMock(return_value=fake_user)),
             patch("app.api.routes.ws.crud.get_cached_generation", AsyncMock(return_value=None)),
             patch(
-                "app.api.routes.ws.run_generate_notes",
+                "app.api.routes.ws.jobs.submit_and_wait",
                 AsyncMock(return_value={"error": "topic_not_in_unit", "message": "Topic not found."}),
             ),
         ):
@@ -289,7 +289,7 @@ class TestWsGenerateMCQ:
             patch("app.api.routes.ws.crud.get_pooled_items", AsyncMock(return_value=[])),
             patch("app.api.routes.ws.crud.save_generation", AsyncMock(return_value=fake_gen)),
             patch("app.api.routes.ws.crud.link_user_generation", AsyncMock()),
-            patch("app.api.routes.ws.run_generate_mcqs", AsyncMock(return_value=FIXTURE_MCQ_RESPONSE)),
+            patch("app.api.routes.ws.jobs.submit_and_wait", AsyncMock(return_value=FIXTURE_MCQ_RESPONSE)),
         ):
             with client.websocket_connect("/api/ws/generate/mcq?token=test-token") as ws:
                 ws.send_json(MCQ_PAYLOAD)
@@ -312,7 +312,7 @@ class TestWsGenerateMCQ:
             patch("app.api.routes.ws.crud.get_pooled_items", AsyncMock(return_value=[])),
             patch("app.api.routes.ws.crud.save_generation", AsyncMock(return_value=fake_gen)),
             patch("app.api.routes.ws.crud.link_user_generation", AsyncMock()),
-            patch("app.api.routes.ws.run_generate_mcqs", AsyncMock(return_value=FIXTURE_MCQ_RESPONSE)),
+            patch("app.api.routes.ws.jobs.submit_and_wait", AsyncMock(return_value=FIXTURE_MCQ_RESPONSE)),
         ):
             with client.websocket_connect("/api/ws/generate/mcq?token=test-token") as ws:
                 ws.send_json(MCQ_PAYLOAD)
@@ -336,7 +336,7 @@ class TestWsGenerateMCQ:
             patch("app.api.routes.ws.crud.get_pooled_items", AsyncMock(return_value=[])),
             patch("app.api.routes.ws.crud.save_generation", AsyncMock(return_value=fake_gen)),
             patch("app.api.routes.ws.crud.link_user_generation", AsyncMock()),
-            patch("app.api.routes.ws.run_generate_mcqs", AsyncMock(return_value=FIXTURE_MCQ_RESPONSE)) as mock_gen,
+            patch("app.api.routes.ws.jobs.submit_and_wait", AsyncMock(return_value=FIXTURE_MCQ_RESPONSE)) as mock_gen,
         ):
             with client.websocket_connect("/api/ws/generate/mcq?token=test-token") as ws:
                 ws.send_json(MCQ_PAYLOAD)
@@ -359,7 +359,7 @@ class TestWsGenerateMCQ:
             patch("app.api.routes.ws.crud.get_pooled_items", AsyncMock(return_value=[])),
             patch("app.api.routes.ws.crud.save_generation", AsyncMock(return_value=fake_gen)),
             patch("app.api.routes.ws.crud.link_user_generation", AsyncMock()),
-            patch("app.api.routes.ws.run_generate_mcqs", AsyncMock(return_value=FIXTURE_MCQ_RESPONSE)),
+            patch("app.api.routes.ws.jobs.submit_and_wait", AsyncMock(return_value=FIXTURE_MCQ_RESPONSE)),
         ):
             with client.websocket_connect("/api/ws/generate/mcq?token=test-token") as ws:
                 ws.send_json(MCQ_PAYLOAD)
@@ -377,7 +377,7 @@ class TestWsGenerateMCQ:
             patch("app.api.routes.ws._auth_ws", AsyncMock(return_value=fake_user)),
             patch("app.api.routes.ws.crud.get_pooled_items", AsyncMock(return_value=[])),
             patch(
-                "app.api.routes.ws.run_generate_mcqs",
+                "app.api.routes.ws.jobs.submit_and_wait",
                 AsyncMock(return_value={"error": "No relevant documents found"}),
             ),
         ):
@@ -406,7 +406,7 @@ class TestWsGenerateFlashcards:
             patch("app.api.routes.ws.crud.get_pooled_items", AsyncMock(return_value=[])),
             patch("app.api.routes.ws.crud.save_generation", AsyncMock(return_value=fake_gen)),
             patch("app.api.routes.ws.crud.link_user_generation", AsyncMock()),
-            patch("app.api.routes.ws.run_generate_flashcards", AsyncMock(return_value=FIXTURE_FLASHCARD_RESPONSE)),
+            patch("app.api.routes.ws.jobs.submit_and_wait", AsyncMock(return_value=FIXTURE_FLASHCARD_RESPONSE)),
         ):
             with client.websocket_connect("/api/ws/generate/flashcards?token=test-token") as ws:
                 ws.send_json(FLASHCARD_PAYLOAD)
@@ -429,7 +429,7 @@ class TestWsGenerateFlashcards:
             patch("app.api.routes.ws.crud.get_pooled_items", AsyncMock(return_value=[])),
             patch("app.api.routes.ws.crud.save_generation", AsyncMock(return_value=fake_gen)),
             patch("app.api.routes.ws.crud.link_user_generation", AsyncMock()),
-            patch("app.api.routes.ws.run_generate_flashcards", AsyncMock(return_value=FIXTURE_FLASHCARD_RESPONSE)),
+            patch("app.api.routes.ws.jobs.submit_and_wait", AsyncMock(return_value=FIXTURE_FLASHCARD_RESPONSE)),
         ):
             with client.websocket_connect("/api/ws/generate/flashcards?token=test-token") as ws:
                 ws.send_json(FLASHCARD_PAYLOAD)
@@ -453,7 +453,7 @@ class TestWsGenerateFlashcards:
             patch("app.api.routes.ws.crud.get_pooled_items", AsyncMock(return_value=[])),
             patch("app.api.routes.ws.crud.save_generation", AsyncMock(return_value=fake_gen)),
             patch("app.api.routes.ws.crud.link_user_generation", AsyncMock()),
-            patch("app.api.routes.ws.run_generate_flashcards", AsyncMock(return_value=FIXTURE_FLASHCARD_RESPONSE)) as mock_gen,
+            patch("app.api.routes.ws.jobs.submit_and_wait", AsyncMock(return_value=FIXTURE_FLASHCARD_RESPONSE)) as mock_gen,
         ):
             with client.websocket_connect("/api/ws/generate/flashcards?token=test-token") as ws:
                 ws.send_json(FLASHCARD_PAYLOAD)
@@ -476,7 +476,7 @@ class TestWsGenerateFlashcards:
             patch("app.api.routes.ws.crud.get_pooled_items", AsyncMock(return_value=[])),
             patch("app.api.routes.ws.crud.save_generation", AsyncMock(return_value=fake_gen)),
             patch("app.api.routes.ws.crud.link_user_generation", AsyncMock()),
-            patch("app.api.routes.ws.run_generate_flashcards", AsyncMock(return_value=FIXTURE_FLASHCARD_RESPONSE)),
+            patch("app.api.routes.ws.jobs.submit_and_wait", AsyncMock(return_value=FIXTURE_FLASHCARD_RESPONSE)),
         ):
             with client.websocket_connect("/api/ws/generate/flashcards?token=test-token") as ws:
                 ws.send_json(FLASHCARD_PAYLOAD)
@@ -513,7 +513,7 @@ class TestWsProtocol:
             patch("app.api.routes.ws.crud.get_cached_generation", AsyncMock(return_value=None)),
             patch("app.api.routes.ws.crud.save_generation", AsyncMock(return_value=fake_gen)),
             patch("app.api.routes.ws.crud.link_user_generation", AsyncMock()),
-            patch("app.api.routes.ws.run_generate_notes", AsyncMock(return_value=FIXTURE_NOTES_RESPONSE)),
+            patch("app.api.routes.ws.jobs.submit_and_wait", AsyncMock(return_value=FIXTURE_NOTES_RESPONSE)),
         ):
             with client.websocket_connect("/api/ws/generate/notes?token=test-token") as ws:
                 ws.send_json(NOTES_PAYLOAD)
@@ -538,7 +538,7 @@ class TestWsProtocol:
             patch("app.api.routes.ws.crud.get_cached_generation", AsyncMock(return_value=None)),
             patch("app.api.routes.ws.crud.save_generation", AsyncMock(return_value=fake_gen)),
             patch("app.api.routes.ws.crud.link_user_generation", AsyncMock()),
-            patch("app.api.routes.ws.run_generate_notes", AsyncMock(return_value=FIXTURE_NOTES_RESPONSE)),
+            patch("app.api.routes.ws.jobs.submit_and_wait", AsyncMock(return_value=FIXTURE_NOTES_RESPONSE)),
         ):
             with client.websocket_connect("/api/ws/generate/notes?token=test-token") as ws:
                 ws.send_json(NOTES_PAYLOAD)
@@ -557,7 +557,7 @@ class TestWsProtocol:
             patch("app.api.routes.ws._auth_ws", AsyncMock(return_value=fake_user)),
             patch("app.api.routes.ws.crud.get_cached_generation", AsyncMock(return_value=None)),
             patch(
-                "app.api.routes.ws.run_generate_notes",
+                "app.api.routes.ws.jobs.submit_and_wait",
                 AsyncMock(return_value={"error": "some_error_code", "message": "Something went wrong."}),
             ),
         ):

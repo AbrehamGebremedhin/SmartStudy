@@ -35,7 +35,13 @@ async def lifespan(app: FastAPI):
         logger.info("Ollama embedding model warmed up")
     except Exception as _e:
         logger.warning("Ollama warmup skipped (Ollama may not be running): %s", _e)
+    if settings.jobs_enabled:
+        from app.services import jobs
+        await jobs.start()
     yield
+    if settings.jobs_enabled:
+        from app.services import jobs
+        await jobs.stop()
     await engine.dispose()
 
 

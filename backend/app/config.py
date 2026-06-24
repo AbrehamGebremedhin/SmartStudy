@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     app_token_expire_days: int = 30
     poppler_path: str | None = None
     allowed_origins: list[str] = ["http://localhost:3000", "http://localhost:5173"]
+    jobs_enabled: bool = True   # background job-queue worker pool; disabled in tests
 
     # Gemini keys for the exam-question enrichment job. Each MUST come from a
     # separate Google Cloud project (free-tier quota is per-project, not per-key).

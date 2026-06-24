@@ -37,6 +37,13 @@ class AnswerSource(str, Enum):
     inferred = "inferred"   # correct answer was solved by the enrichment LLM
 
 
+class JobStatus(str, Enum):
+    queued = "queued"
+    running = "running"
+    done = "done"
+    failed = "failed"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -142,6 +149,36 @@ class ExamQuestion(Base):
 
     needs_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Job(Base):
+    """A durable background job claimed by async workers via SKIP LOCKED.
+
+    The DB is the queue: `(status, run_after)` is indexed so a worker can claim
+    the oldest ready job with `SELECT ... FOR UPDATE SKIP LOCKED`. That same lock
+    coordinates across processes, so running more app instances scales throughput
+    with zero code change. See app/services/jobs.py.
+    """
+
+    __tablename__ = "jobs"
+    __table_args__ = (
+        Index("ix_jobs_status_run_after", "status", "run_after"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    type: Mapped[str] = mapped_column(String, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(String, nullable=False, default=JobStatus.queued.value)
+    result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    # When the job becomes eligible to run; bumped into the future for retry backoff.
+    run_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    # Set when a worker claims the job; a stale lock is reclaimed by the reaper.
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class ChatSession(Base):
