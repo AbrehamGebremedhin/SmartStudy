@@ -125,6 +125,21 @@ class TestParseLlmResponse:
         result = parse_llm_response(raw)
         assert "questions" in result
 
+    def test_structural_newlines_not_corrupted_by_repair(self):
+        # The load-test failure: pretty-printed JSON (structural newlines) with a
+        # bare newline inside ONE value. The repair must escape only the in-string
+        # newline, not the structural ones — otherwise `{\n` becomes a stray token
+        # and parsing dies with "Expecting property name ... char 1".
+        raw = '{\n  "questions": "line1\nline2",\n  "difficulty": "hard"\n}'
+        result = parse_llm_response(raw)
+        assert result["difficulty"] == "hard"
+        assert result["questions"] == "line1\nline2"   # in-string newline preserved
+
+    def test_bare_tab_inside_value_repaired(self):
+        raw = '{"questions": "a\tb"}'
+        result = parse_llm_response(raw)
+        assert result["questions"] == "a\tb"
+
 
 # ---------------------------------------------------------------------------
 # retry_on_none

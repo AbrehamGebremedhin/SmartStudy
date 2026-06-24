@@ -77,18 +77,50 @@ def clean_unicode(text: str) -> str:
     return result
 
 
+def _escape_ctrl_in_strings(text: str) -> str:
+    """Escape raw newlines/tabs/CRs that sit *inside* JSON string literals.
+
+    A blanket regex would also escape the structural whitespace between tokens
+    (e.g. the newline after `{`), turning valid JSON into `{\\n"key"` — two stray
+    chars where a key is expected. So track quote state and only repair within
+    strings, respecting backslash escapes.
+    """
+    out: list[str] = []
+    in_str = False
+    escaped = False
+    for ch in text:
+        if not in_str:
+            out.append(ch)
+            if ch == '"':
+                in_str = True
+            continue
+        if escaped:
+            out.append(ch)
+            escaped = False
+        elif ch == '\\':
+            out.append(ch)
+            escaped = True
+        elif ch == '"':
+            out.append(ch)
+            in_str = False
+        elif ch == '\n':
+            out.append('\\n')
+        elif ch == '\t':
+            out.append('\\t')
+        elif ch == '\r':
+            out.append('\\r')
+        else:
+            out.append(ch)
+    return ''.join(out)
+
+
 def _try_parse(text: str) -> Any:
-    """Attempt json.loads, then retry with escaped bare newlines/tabs."""
+    """Attempt json.loads, then retry with control chars escaped inside strings."""
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
-    # Bare newlines/tabs inside string values break strict JSON.
-    # Replace every unescaped newline/tab with its JSON escape sequence.
-    import re
-    repaired = re.sub(r'(?<!\\)\n', r'\\n', text)
-    repaired = re.sub(r'(?<!\\)\t', r'\\t', repaired)
-    return json.loads(repaired)  # let this raise if still broken
+    return json.loads(_escape_ctrl_in_strings(text))  # let this raise if still broken
 
 
 def parse_llm_response(response: str, logger: logging.Logger = None) -> Dict[str, Any]:
