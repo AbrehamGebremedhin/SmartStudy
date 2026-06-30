@@ -6,6 +6,7 @@ import EmptyState from '../components/ui/EmptyState'
 import Icon from '../components/ui/Icon'
 import Confetti from '../components/ui/Confetti'
 import GeneratingState from '../components/ui/GeneratingState'
+import ErrorState from '../components/ui/ErrorState'
 import { saveGeneration, loadGeneration, updateGeneration } from '../lib/genStorage'
 import { awardXP, recordLastGen, resultMessage } from '../lib/gamification'
 import { useGenerationWS } from '../hooks/useGenerationWS'
@@ -217,7 +218,7 @@ export default function MCQ() {
         )}
 
         {error && (
-          <div className="form-error">{error}</div>
+          <ErrorState title="Couldn't generate questions" error={error} onRetry={handleGenerate} />
         )}
 
         {loading && (

@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { api } from '../services/apiClient'
 import Icon from '../components/ui/Icon'
 import EmptyState from '../components/ui/EmptyState'
+import ErrorState from '../components/ui/ErrorState'
 import Confetti from '../components/ui/Confetti'
 import { awardXP, resultMessage } from '../lib/gamification'
 
@@ -31,14 +32,16 @@ export default function MockExam() {
   const spec = subjects.find(s => s.subject === config.subject)
 
   // Load available subjects (with per-subject exam spec) once.
-  useEffect(() => {
+  function loadSubjects() {
+    setError(null)
     api.get('/exam/subjects')
       .then(d => {
         setSubjects(d.subjects)
         if (d.subjects[0]) setConfig(c => ({ ...c, subject: d.subjects[0].subject }))
       })
-      .catch(e => setError(e.message))
-  }, [])
+      .catch(e => setError(e))
+  }
+  useEffect(() => { loadSubjects() }, [])
 
   function reset() {
     setQuestions([]); setSelected({}); setStarted(false); setSubmitted(false)
@@ -68,7 +71,7 @@ export default function MockExam() {
       setTimeLeft(d.minutes * 60)
       setStarted(true)
     } catch (e) {
-      setError(e.message)
+      setError(e)
     } finally {
       setLoading(false)
     }
@@ -158,7 +161,13 @@ export default function MockExam() {
           </div>
         )}
 
-        {error && <div className="form-error">{error}</div>}
+        {error && (
+          <ErrorState
+            title={subjects.length ? "Couldn't start the exam" : "Couldn't load exams"}
+            error={error}
+            onRetry={subjects.length ? start : loadSubjects}
+          />
+        )}
 
         {!started && !error && (
           <EmptyState icon="quiz" title="Ready for a Real Exam?"

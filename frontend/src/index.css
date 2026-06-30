@@ -1280,8 +1280,33 @@ select:focus, input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px rg
   display: flex;
   flex-direction: column;
   align-items: center;
+  animation: errIn 360ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
 }
-.error-state-i { display: flex; justify-content: center; margin-bottom: 14px; color: var(--vermillion); opacity: 0.9; }
+.error-state-i {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 14px;
+  color: var(--vermillion);
+  opacity: 0.9;
+  animation: errIcon 560ms cubic-bezier(0.3, 0.8, 0.3, 1) both;
+  transform-origin: center;
+}
+@keyframes errIn {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to   { opacity: 1; transform: none; }
+}
+/* Scale in, then one settle-shake to read as "something broke". */
+@keyframes errIcon {
+  0%   { opacity: 0; transform: scale(0.5); }
+  55%  { opacity: 1; transform: scale(1.1); }
+  68%  { transform: scale(1) translateX(-3px); }
+  80%  { transform: translateX(3px); }
+  90%  { transform: translateX(-2px); }
+  100% { transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .error-state, .error-state-i { animation: none; }
+}
 .error-state h3 { font-family: var(--f-display); font-size: 18px; color: var(--ink); font-weight: 700; margin-bottom: 6px; }
 .error-state p { font-size: 14px; color: var(--ink-3); max-width: 340px; margin: 0 auto; line-height: 1.6; }
 .error-state-cta { margin-top: 18px; display: inline-flex; align-items: center; gap: 7px; }
@@ -2739,6 +2764,25 @@ select:focus, input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px rg
 /* ── History list bits ── */
 .filter-row { display: flex; gap: 6px; margin-bottom: 18px; flex-wrap: wrap; }
 .list-loading { text-align: center; padding: 40px; color: var(--ink-3); }
+
+/* Skeleton placeholders (history list while loading) */
+.skel-row { cursor: default; pointer-events: none; }
+.skel {
+  background: linear-gradient(90deg, var(--border) 25%, var(--border-2) 50%, var(--border) 75%);
+  background-size: 200% 100%;
+  border-radius: var(--r-s);
+  animation: skelShimmer 1.4s ease-in-out infinite;
+}
+.skel-ico { width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0; }
+.skel-title { height: 13px; width: 60%; margin-bottom: 7px; }
+.skel-meta { height: 11px; width: 35%; }
+@keyframes skelShimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skel { animation: none; }
+}
 .h-score {
   font-size: 12px;
   font-weight: 800;

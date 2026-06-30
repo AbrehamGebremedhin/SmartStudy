@@ -175,7 +175,17 @@ export default function History() {
         </div>
 
         {loading && (
-          <div className="list-loading">Loading…</div>
+          <div className="hist-list" aria-hidden="true">
+            {[0, 1, 2, 3].map(i => (
+              <div key={i} className="hist-row skel-row">
+                <span className="skel skel-ico" />
+                <div className="h-info">
+                  <div className="skel skel-title" />
+                  <div className="skel skel-meta" />
+                </div>
+              </div>
+            ))}
+          </div>
         )}
 
         {error && (

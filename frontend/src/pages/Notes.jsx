@@ -242,13 +242,9 @@ export default function Notes() {
           generateLabel="Generate Notes"
         />
 
-        {error && (typeof error === 'string' ? (
-          <div style={{ color: 'var(--vermillion)', marginBottom: 16, fontSize: 14 }}>
-            {error}
-          </div>
-        ) : (
+        {error && (
           <ErrorState title="Couldn't generate notes" error={error} onRetry={handleGenerate} />
-        ))}
+        )}
 
         {loading && (
           <GeneratingState
