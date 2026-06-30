@@ -781,11 +781,28 @@ select:focus, input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px rg
 .weak-sub { color: var(--ink-2); font-size: 13px; margin: 4px 0 10px; }
 .weak-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
 .weak-list li {
-  display: flex; justify-content: space-between; gap: 12px;
-  padding: 8px 12px; background: var(--sandstone); border-radius: var(--r-s); font-size: 14px;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  min-height: 44px; padding: 8px 12px;
+  background: var(--sandstone); border-radius: var(--r-s); font-size: 14px;
 }
-.weak-count { color: var(--vermillion); font-weight: 700; white-space: nowrap; }
+.weak-count { color: var(--vermillion); font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .weak-loc { color: var(--ink-2); font-size: 12px; }
+.weak-row { cursor: pointer; transition: background .12s, transform .12s; }
+.weak-row:hover { background: var(--border); transform: translateX(2px); }
+.weak-row:focus-visible { outline: 2px solid var(--ochre); outline-offset: 2px; }
+
+/* Post-submit review filter chips */
+.review-filter { display: flex; gap: 8px; margin: 16px 0 4px; flex-wrap: wrap; }
+.rf-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 44px; padding: 6px 16px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--card); color: var(--ink-2); font-size: 13px; font-weight: 600; cursor: pointer;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.rf-chip:hover { border-color: var(--ochre); }
+.rf-chip:focus-visible { outline: 2px solid var(--ochre); outline-offset: 2px; }
+.rf-chip.active { background: var(--ochre); border-color: var(--ochre); color: #fff; }
+.rf-n { font-weight: 800; opacity: .85; font-variant-numeric: tabular-nums; }
 .mcq-expl {
   margin-top: 14px;
   padding: 14px 16px;

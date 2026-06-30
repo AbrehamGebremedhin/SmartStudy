@@ -25,6 +25,7 @@ export default function MockExam() {
   const [submitted, setSubmitted] = useState(false)
   const [timeLeft, setTimeLeft] = useState(0)
   const [xpEarned, setXpEarned] = useState(0)
+  const [filter, setFilter] = useState('all') // post-submit review filter: all | incorrect | unanswered
   const submitRef = useRef(null)
 
   const spec = subjects.find(s => s.subject === config.subject)
@@ -41,7 +42,20 @@ export default function MockExam() {
 
   function reset() {
     setQuestions([]); setSelected({}); setStarted(false); setSubmitted(false)
-    setTimeLeft(0); setXpEarned(0); setError(null)
+    setTimeLeft(0); setXpEarned(0); setError(null); setFilter('all')
+  }
+
+  // Status of a question after submit; drives the review filter and ✓/✗ marks.
+  function qStatus(i) {
+    if (selected[i] === questions[i].correct_answer) return 'correct'
+    if (selected[i]) return 'wrong'
+    return 'blank'
+  }
+
+  function jumpTo(i) {
+    setFilter('all')
+    requestAnimationFrame(() =>
+      document.getElementById(`q${i}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
   }
 
   async function start() {
@@ -93,18 +107,20 @@ export default function MockExam() {
     ? { correct: questions.filter((q, i) => selected[i] === q.correct_answer).length, total: questions.length }
     : null
 
-  // Weak areas: topics with the most wrong answers, with their grade/unit (study suggestions).
+  // Weak areas: group misses by unit (the real study bucket) so every wrong answer is
+  // covered — topics are per-question granular, grouping by them only ever shows ~1 each.
   const weakAreas = useMemo(() => {
     if (!submitted) return []
     const m = {}
     questions.forEach((q, i) => {
       if (selected[i] !== q.correct_answer) {
-        const t = q.topic || 'General'
-        if (!m[t]) m[t] = { count: 0, grade: q.grade, unit: q.unit }
-        m[t].count += 1
+        const loc = q.grade ? `Grade ${q.grade}${q.unit ? ` · Unit ${q.unit}` : ''}` : 'General'
+        if (!m[loc]) m[loc] = { count: 0, topics: new Set(), firstIndex: i }
+        m[loc].count += 1
+        if (q.topic) m[loc].topics.add(q.topic)
       }
     })
-    return Object.entries(m).sort((a, b) => b[1].count - a[1].count).slice(0, 8)
+    return Object.entries(m).sort((a, b) => b[1].count - a[1].count)
   }, [submitted]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
@@ -162,15 +178,35 @@ export default function MockExam() {
 
         {/* Results + weak areas (after submit) */}
         {score && (
-          <ExamResults score={score} xpEarned={xpEarned} weakAreas={weakAreas} onNew={reset} />
+          <ExamResults score={score} xpEarned={xpEarned} weakAreas={weakAreas}
+                       onNew={reset} onJump={jumpTo} />
+        )}
+
+        {/* Review filter: jump straight to the questions you missed in a large paper. */}
+        {submitted && (
+          <div className="review-filter">
+            {[['all', 'All'], ['incorrect', 'Incorrect'], ['unanswered', 'Unanswered']].map(([k, lbl]) => {
+              const n = k === 'all' ? questions.length
+                : k === 'incorrect' ? questions.filter((q, i) => qStatus(i) !== 'correct').length
+                : questions.filter((q, i) => qStatus(i) === 'blank').length
+              return (
+                <button key={k} className={`rf-chip ${filter === k ? 'active' : ''}`}
+                        onClick={() => setFilter(k)}>
+                  {lbl} <span className="rf-n">{n}</span>
+                </button>
+              )
+            })}
+          </div>
         )}
 
         {/* Questions */}
         {questions.map((q, qi) => {
           const userAnswer = selected[qi]
           const correct = q.correct_answer
+          if (submitted && filter === 'incorrect' && qStatus(qi) === 'correct') return null
+          if (submitted && filter === 'unanswered' && qStatus(qi) !== 'blank') return null
           return (
-            <div key={q.id} className="mcq-card anim">
+            <div key={q.id} id={`q${qi}`} className="mcq-card anim">
               <div className="mcq-top">
                 <span className="mcq-topic">{submitted ? (q.topic ?? `Question ${qi + 1}`) : `Question ${qi + 1}`}</span>
                 {submitted && (
@@ -237,7 +273,7 @@ export default function MockExam() {
   )
 }
 
-function ExamResults({ score, xpEarned, weakAreas, onNew }) {
+function ExamResults({ score, xpEarned, weakAreas, onNew, onJump }) {
   const pct = Math.round((score.correct / score.total) * 100)
   const band = pct >= 80 ? 'band-high' : pct >= 50 ? 'band-mid' : 'band-low'
   const label = pct >= 80 ? 'Excellent' : pct >= 50 ? 'Keep Practicing' : 'Needs Work'
@@ -259,19 +295,19 @@ function ExamResults({ score, xpEarned, weakAreas, onNew }) {
       {weakAreas.length > 0 && (
         <div className="weak-areas">
           <div className="weak-title"><Icon name="target" size={15} /> Areas to study</div>
-          <p className="weak-sub">Topics where you missed the most — focus here to improve.</p>
+          <p className="weak-sub">Units where you missed the most — tap one to jump to those questions.</p>
           <ul className="weak-list">
-            {weakAreas.map(([topic, info]) => {
-              const loc = info.grade
-                ? `Grade ${info.grade}${info.unit ? ` · Unit ${info.unit}` : ''}`
-                : null
-              return (
-                <li key={topic}>
-                  <span>{topic}{loc && <span className="weak-loc"> — {loc}</span>}</span>
-                  <span className="weak-count">{info.count} missed</span>
-                </li>
-              )
-            })}
+            {weakAreas.map(([loc, info]) => (
+              <li key={loc} className="weak-row" role="button" tabIndex={0}
+                  onClick={() => onJump(info.firstIndex)}
+                  onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), onJump(info.firstIndex))}>
+                <span>{loc}{info.topics.size > 0 && (
+                  <span className="weak-loc"> — {[...info.topics].slice(0, 4).join(', ')}
+                    {info.topics.size > 4 ? '…' : ''}</span>
+                )}</span>
+                <span className="weak-count">{info.count} missed</span>
+              </li>
+            ))}
           </ul>
         </div>
       )}
