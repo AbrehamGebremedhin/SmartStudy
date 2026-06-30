@@ -1,6 +1,8 @@
+import { useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import NotFound from './pages/NotFound'
 import { AuthProvider, useAuth } from './context/AuthContext'
+import { syncOnLogin, startProgressSync } from './lib/progressSync'
 import Sidebar from './components/layout/Sidebar'
 import MobileHeader from './components/layout/MobileHeader'
 import BottomNav from './components/layout/BottomNav'
@@ -40,6 +42,11 @@ function AppShell() {
 
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth()
+  useEffect(() => {
+    if (!user) return
+    startProgressSync()
+    syncOnLogin()
+  }, [user])
   if (loading) return null
   return user ? children : <Navigate to="/login" replace />
 }

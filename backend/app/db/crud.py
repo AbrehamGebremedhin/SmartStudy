@@ -6,8 +6,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.db.models import (ChatMessage, ChatSession, ExamQuestion, Generation, SecurityEvent,
-                           User, UserGeneration)
+from app.db.models import (ChatMessage, ChatSession, ExamQuestion, FlashcardReview, Generation,
+                           SecurityEvent, User, UserGeneration, UserProgress)
+from app.services import srs
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +311,82 @@ async def add_chat_message(
     await db.flush()
     await db.refresh(message)
     return message
+
+
+# ---------------------------------------------------------------------------
+# User progress (gamification profile)
+# ---------------------------------------------------------------------------
+
+async def get_user_progress(db: AsyncSession, user_id: uuid.UUID) -> UserProgress | None:
+    result = await db.execute(select(UserProgress).where(UserProgress.user_id == user_id))
+    return result.scalar_one_or_none()
+
+
+async def upsert_user_progress(db: AsyncSession, user_id: uuid.UUID, profile: dict) -> UserProgress:
+    """Insert-or-replace the user's progress blob (last-write-wins)."""
+    await db.execute(
+        pg_insert(UserProgress)
+        .values(user_id=user_id, profile=profile)
+        .on_conflict_do_update(
+            index_elements=["user_id"],
+            set_={"profile": profile, "updated_at": datetime.now(timezone.utc)},
+        )
+    )
+    await db.commit()
+    return (await get_user_progress(db, user_id))  # type: ignore[return-value]
+
+
+# ---------------------------------------------------------------------------
+# Flashcard spaced repetition (Leitner)
+# ---------------------------------------------------------------------------
+
+async def record_flashcard_review(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    front: str,
+    back: str,
+    topic: str | None,
+    subject: str | None,
+    known: bool,
+) -> FlashcardReview:
+    """Upsert Leitner state for a card: advance/reset its box and reschedule."""
+    key = srs.card_key(front)
+    existing = await db.get(FlashcardReview, (user_id, key))
+    current_box = existing.box if existing else 1
+    box = srs.next_box(current_box, known)
+    due = srs.due_at(box)
+    await db.execute(
+        pg_insert(FlashcardReview)
+        .values(
+            user_id=user_id, card_key=key, front=front, back=back,
+            topic=topic, subject=subject, box=box, due_at=due,
+        )
+        .on_conflict_do_update(
+            index_elements=["user_id", "card_key"],
+            set_={
+                "box": box, "due_at": due, "back": back,
+                "topic": topic, "subject": subject,
+                "last_rated_at": datetime.now(timezone.utc),
+            },
+        )
+    )
+    await db.commit()
+    return await db.get(FlashcardReview, (user_id, key))  # type: ignore[return-value]
+
+
+async def get_due_flashcards(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    subject: str | None = None,
+    limit: int = 20,
+) -> list[FlashcardReview]:
+    conds = [FlashcardReview.user_id == user_id, FlashcardReview.due_at <= datetime.now(timezone.utc)]
+    if subject:
+        conds.append(FlashcardReview.subject == subject)
+    result = await db.execute(
+        select(FlashcardReview).where(*conds).order_by(FlashcardReview.due_at).limit(limit)
+    )
+    return list(result.scalars().all())
 
 
 # ---------------------------------------------------------------------------

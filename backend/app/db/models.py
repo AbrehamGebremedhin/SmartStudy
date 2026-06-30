@@ -181,6 +181,48 @@ class Job(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class UserProgress(Base):
+    """Server-side mirror of the frontend gamification profile (XP, streaks,
+    counters, achievements, activity). One row per user; the whole profile is
+    stored as an opaque JSON blob — the frontend owns its shape and validation.
+
+    Sync is last-write-wins on `updated_at`; the client merges its local profile
+    with this on login so two devices don't clobber each other's progress.
+    """
+
+    __tablename__ = "user_progress"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), primary_key=True)
+    profile: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class FlashcardReview(Base):
+    """Per-user Leitner-box review state for a single flashcard.
+
+    Cards have no stable id (they're pooled/shuffled), so `card_key` is a hash of
+    the question text (see app/services/srs.py). The card body is snapshotted here
+    so the "due" deck can be served without regenerating. One row per (user, card).
+    """
+
+    __tablename__ = "flashcard_reviews"
+    __table_args__ = (
+        Index("ix_flashcard_reviews_user_due", "user_id", "due_at"),
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), primary_key=True)
+    card_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+    front: Mapped[str] = mapped_column(Text, nullable=False)
+    back: Mapped[str] = mapped_column(Text, nullable=False)
+    topic: Mapped[str | None] = mapped_column(String, nullable=True)
+    subject: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+
+    box: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_rated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
     __table_args__ = (

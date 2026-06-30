@@ -256,6 +256,53 @@ export function getProfile() {
   return load()
 }
 
+/** Sanitize + persist a raw profile (used when applying merged server state). */
+export function setProfile(raw) {
+  const p = sanitize(raw)
+  p.migrated = true  // server data is already post-migration; don't re-run migrate
+  save(p)
+  return p
+}
+
+/**
+ * Merge two profiles without losing progress, for cross-device sync.
+ * ponytail: takes the max of every counter (never the sum) — safe against
+ * undercounting; can slightly undercount if the same action happened on two
+ * devices. Switch to event-sourced deltas if exactness ever matters.
+ */
+export function mergeProfiles(a, b) {
+  const pa = sanitize(a)
+  const pb = sanitize(b)
+  const out = defaultProfile()
+  out.xp = Math.max(pa.xp, pb.xp)
+  out.streak = {
+    current: Math.max(pa.streak.current, pb.streak.current),
+    best: Math.max(pa.streak.best, pb.streak.best),
+    lastActive: pa.streak.lastActive > pb.streak.lastActive ? pa.streak.lastActive : pb.streak.lastActive,
+  }
+  for (const k of Object.keys(out.counters)) out.counters[k] = Math.max(pa.counters[k], pb.counters[k])
+  out.day = pa.day.date > pb.day.date ? pa.day
+    : pa.day.date < pb.day.date ? pb.day
+    : { date: pa.day.date, chat: Math.max(pa.day.chat, pb.day.chat) }
+  for (const src of [pa.subjects, pb.subjects]) {
+    for (const [id, s] of Object.entries(src)) {
+      const cur = out.subjects[id] ?? { answered: 0, correct: 0 }
+      out.subjects[id] = { answered: Math.max(cur.answered, s.answered), correct: Math.max(cur.correct, s.correct) }
+    }
+  }
+  for (const src of [pa.achievements, pb.achievements]) {
+    for (const [id, at] of Object.entries(src)) {
+      out.achievements[id] = out.achievements[id] && out.achievements[id] < at ? out.achievements[id] : at
+    }
+  }
+  for (const src of [pa.activity, pb.activity]) {
+    for (const [day, xp] of Object.entries(src)) out.activity[day] = Math.max(num(out.activity[day]), xp)
+  }
+  out.lastGen = (pa.lastGen?.at ?? '') > (pb.lastGen?.at ?? '') ? pa.lastGen : pb.lastGen
+  out.migrated = true
+  return out
+}
+
 export function getLevelInfo(xp) {
   const points = xp ?? load().xp
   const index = levelIndex(points)
