@@ -189,8 +189,10 @@ export default function MockExam() {
               const n = k === 'all' ? questions.length
                 : k === 'incorrect' ? questions.filter((q, i) => qStatus(i) !== 'correct').length
                 : questions.filter((q, i) => qStatus(i) === 'blank').length
+              if (n === 0 && k !== 'all') return null  // don't offer a filter that lands on nothing
               return (
                 <button key={k} className={`rf-chip ${filter === k ? 'active' : ''}`}
+                        aria-pressed={filter === k}
                         onClick={() => setFilter(k)}>
                   {lbl} <span className="rf-n">{n}</span>
                 </button>

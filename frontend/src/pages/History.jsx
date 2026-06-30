@@ -197,7 +197,10 @@ export default function History() {
             <div
               key={item.user_generation_id ?? i}
               className="hist-row anim"
+              role="button"
+              tabIndex={0}
               onClick={() => handleOpen(item)}
+              onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), handleOpen(item))}
             >
               <span className="h-ico"><Icon name={typeIcon(item.type)} size={20} /></span>
               <div className="h-info">

@@ -1249,6 +1249,7 @@ select:focus, input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px rg
   transition: all 0.15s;
 }
 .hist-row:hover { box-shadow: var(--sh-1); border-color: var(--border-2); }
+.hist-row:focus-visible { outline: 2px solid var(--ochre); outline-offset: 2px; }
 .h-ico { flex-shrink: 0; display: flex; color: var(--ochre); }
 .h-info { flex: 1; min-width: 0; }
 .h-title { font-size: 14px; font-weight: 600; }
