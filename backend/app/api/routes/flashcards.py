@@ -1,7 +1,8 @@
 import math
 import random
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -32,6 +33,61 @@ def _format_chat_context(messages) -> str:
     return result
 
 router = APIRouter(prefix="/flashcards", tags=["Flashcards"])
+
+
+# ── Spaced repetition (Leitner) ───────────────────────────────────────────────
+
+class ReviewRequest(BaseModel):
+    front: str = Field(..., min_length=1, max_length=2000)
+    back: str = Field(..., min_length=1, max_length=4000)
+    topic: str | None = Field(default=None, max_length=200)
+    subject: str | None = Field(default=None, max_length=50)
+    known: bool
+
+
+class ReviewState(BaseModel):
+    box: int
+    due_at: str
+
+
+class DueCard(BaseModel):
+    front: str
+    back: str
+    topic: str | None
+    subject: str | None
+    box: int
+    due_at: str
+
+
+@router.post("/review", response_model=ReviewState)
+@limiter.limit("1000/day")
+@limiter.limit("60/minute")
+async def record_review(
+    request: Request,
+    body: ReviewRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ReviewState:
+    row = await crud.record_flashcard_review(
+        db, current_user.id, front=body.front, back=body.back,
+        topic=body.topic, subject=body.subject, known=body.known,
+    )
+    return ReviewState(box=row.box, due_at=row.due_at.isoformat())
+
+
+@router.get("/due", response_model=list[DueCard])
+async def due_flashcards(
+    subject: str | None = Query(default=None, max_length=50),
+    limit: int = Query(default=20, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[DueCard]:
+    rows = await crud.get_due_flashcards(db, current_user.id, subject=subject, limit=limit)
+    return [
+        DueCard(front=r.front, back=r.back, topic=r.topic, subject=r.subject,
+                box=r.box, due_at=r.due_at.isoformat())
+        for r in rows
+    ]
 
 
 async def _record_cache_hit(db: AsyncSession, user_id, generation_id) -> None:

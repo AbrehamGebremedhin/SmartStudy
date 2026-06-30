@@ -9,6 +9,7 @@ import ErrorState from '../components/ui/ErrorState'
 import { saveGeneration, loadGeneration, updateGeneration } from '../lib/genStorage'
 import { awardXP, recordLastGen } from '../lib/gamification'
 import { useGenerationWS } from '../hooks/useGenerationWS'
+import { api } from '../services/apiClient'
 
 const FLASHCARD_STAGES = [
   { id: 'validating',      label: 'Validating parameters…' },
@@ -61,6 +62,7 @@ export default function Flashcards() {
   const [done, setDone] = useState(false)
   const [xpEarned, setXpEarned] = useState(0)
   const [isReplay, setIsReplay] = useState(false) // reopened completed deck — no re-awards
+  const [dueCount, setDueCount] = useState(0)
 
   useEffect(() => {
     if (!genId) return
@@ -79,6 +81,31 @@ export default function Flashcards() {
       if (saved.config) setConfig(saved.config)
     }
   }, [genId])
+
+  // How many cards are due for spaced-repetition review right now (shown on the
+  // config screen as a "Review N due" shortcut). Refreshed when leaving a deck.
+  useEffect(() => {
+    if (genId) return
+    api.get('/flashcards/due?limit=100')
+      .then(due => setDueCount(due.length))
+      .catch(() => {})
+  }, [genId])
+
+  // Load due cards as a deck (reuses the normal deck-playing UI + local progress).
+  async function loadDueDeck() {
+    try {
+      const due = await api.get('/flashcards/due?limit=20')
+      if (!due.length) { setDueCount(0); return }
+      resetDeckState()
+      const deck = due.map(d => ({ front: d.front, back: d.back, topic: d.topic }))
+      const gid = `due-${Date.now()}`
+      saveGeneration(gid, { type: 'flashcard', cards: deck, config, ratings: {} })
+      setCards(deck)
+      setSearchParams({ gen: gid })
+    } catch {
+      setError("Couldn't load due cards.")
+    }
+  }
 
   function resetDeckState() {
     setCards([])
@@ -142,6 +169,16 @@ export default function Flashcards() {
     const isFirstRating = !inReview && !isReplay && !ratings[i]
     const newRatings = { ...ratings, [i]: value }
     setRatings(newRatings)
+
+    // Record into server-side spaced repetition (Leitner). Fire-and-forget —
+    // localStorage deck progress is unaffected if this fails offline.
+    const c = cards[i]
+    if (c?.front && c?.back) {
+      api.post('/flashcards/review', {
+        front: c.front, back: c.back, topic: c.topic ?? null,
+        subject: config.subject, known: value === 'known',
+      }).catch(() => {})
+    }
 
     let gainedNow = 0
     if (isFirstRating) {
@@ -229,15 +266,26 @@ export default function Flashcards() {
             </button>
           </div>
         ) : (
-          <ConfigPanel
-            config={config}
-            onChange={handleChange}
-            onGenerate={handleGenerate}
-            loading={loading}
-            numItemsLabel="Cards"
-            generateLabel="Generate Flashcards"
-            showTopic={false}
-          />
+          <>
+            {dueCount > 0 && (
+              <div className="context-banner">
+                <Icon name="retry" size={15} />
+                You have {dueCount} card{dueCount === 1 ? '' : 's'} due for review.
+                <button className="btn btn-ochre btn-sm" onClick={loadDueDeck} style={{ marginLeft: 'auto' }}>
+                  Review {dueCount} due
+                </button>
+              </div>
+            )}
+            <ConfigPanel
+              config={config}
+              onChange={handleChange}
+              onGenerate={handleGenerate}
+              loading={loading}
+              numItemsLabel="Cards"
+              generateLabel="Generate Flashcards"
+              showTopic={false}
+            />
+          </>
         )}
 
         {error && (
