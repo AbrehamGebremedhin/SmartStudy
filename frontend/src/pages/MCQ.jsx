@@ -11,6 +11,7 @@ import { saveGeneration, loadGeneration, updateGeneration } from '../lib/genStor
 import { awardXP, recordLastGen, resultMessage } from '../lib/gamification'
 import { useGenerationWS } from '../hooks/useGenerationWS'
 import { recordMistake } from '../services/mistakes.service'
+import { recordAttempts } from '../services/analytics.service'
 
 const MCQ_STAGES = [
   { id: 'validating',      label: 'Validating parameters…' },
@@ -135,6 +136,17 @@ export default function MCQ() {
 
     const isCorrect = letter === questions[qi]?.correct_answer
     if (!isCorrect && questions[qi]) recordMistake('mcq', config.subject, questions[qi])
+    // Log the attempt for mastery analytics — first attempts only, so retakes don't skew accuracy.
+    if (!isRetake && questions[qi]) {
+      const isSAT = config.subject === 'sat'
+      recordAttempts([{
+        subject: config.subject,
+        grade: isSAT ? null : config.grade,
+        unit: isSAT ? null : String(config.unit),
+        topic: questions[qi].topic ?? null,
+        correct: isCorrect,
+      }])
+    }
 
     let gainedNow = 0
     if (!isRetake) {

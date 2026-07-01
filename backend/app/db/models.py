@@ -223,6 +223,27 @@ class FlashcardReview(Base):
     last_rated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class QuestionAttempt(Base):
+    """One answered question (correct or not), append-only. Aggregated into
+    per-unit mastery so the app can target a student's weak areas — the thing
+    the opaque UserProgress blob can't answer.
+    """
+
+    __tablename__ = "question_attempts"
+    __table_args__ = (
+        Index("ix_question_attempts_user_subject", "user_id", "subject"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    subject: Mapped[str] = mapped_column(String, nullable=False)
+    grade: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    unit: Mapped[str | None] = mapped_column(String, nullable=True)
+    topic: Mapped[str | None] = mapped_column(String, nullable=True)
+    correct: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class Mistake(Base):
     """A question the user answered wrong, kept until they get it right on review.
 

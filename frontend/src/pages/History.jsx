@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getHistory, getHistoryByType } from '../services/history.service'
+import { getMastery } from '../services/analytics.service'
 import { typeIcon, subjectLabel } from '../lib/curriculum'
 import { loadGeneration, routeForType } from '../lib/genStorage'
 import { getLevelInfo, getStreak, getStats, getAchievements } from '../lib/gamification'
@@ -23,7 +24,13 @@ export default function History() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [showAch, setShowAch] = useState(false)
+  const [mastery, setMastery] = useState([])
   const navigate = useNavigate()
+
+  // Server-side per-unit mastery (weakest first) — the weak-area view localStorage can't give.
+  useEffect(() => {
+    getMastery().then(setMastery).catch(() => {})
+  }, [])
 
   // localStorage reads are idempotent — safe as lazy initializers under StrictMode
   const [level] = useState(() => getLevelInfo())
@@ -130,6 +137,29 @@ export default function History() {
                 <span className="ins-subj-pct">{s.pct}%</span>
               </div>
             ))}
+          </div>
+        )}
+
+        {mastery.filter(m => m.total >= 3 && m.accuracy < 100).length > 0 && (
+          <div className="weak-areas anim">
+            <div className="weak-title"><Icon name="target" size={15} /> Weak areas</div>
+            <p className="weak-sub">Units where your accuracy is lowest — tap one to practice it.</p>
+            <ul className="weak-list">
+              {mastery.filter(m => m.total >= 3 && m.accuracy < 100).slice(0, 6).map(m => {
+                const loc = [subjectLabel(m.subject), m.grade ? `Grade ${m.grade}` : '', m.unit ? `Unit ${m.unit}` : '']
+                  .filter(Boolean).join(' · ')
+                const go = () => navigate(
+                  `/mcq?subject=${m.subject}${m.grade ? `&grade=${m.grade}` : ''}${m.unit ? `&unit=${encodeURIComponent(m.unit)}` : ''}`)
+                return (
+                  <li key={`${m.subject}-${m.grade}-${m.unit}`} className="weak-row" role="button" tabIndex={0}
+                      onClick={go}
+                      onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), go())}>
+                    <span>{loc || subjectLabel(m.subject)}</span>
+                    <span className="weak-count">{m.accuracy}% · {m.correct}/{m.total}</span>
+                  </li>
+                )
+              })}
+            </ul>
           </div>
         )}
 

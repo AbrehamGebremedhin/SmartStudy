@@ -1,13 +1,14 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select, update
+from sqlalchemy import Integer, cast, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.models import (ChatMessage, ChatSession, ExamQuestion, FlashcardReview, Generation,
-                           Mistake, SecurityEvent, User, UserGeneration, UserProgress)
+                           Mistake, QuestionAttempt, SecurityEvent, User, UserGeneration,
+                           UserProgress)
 from app.services import srs
 
 
@@ -396,6 +397,50 @@ async def get_due_flashcards(
         select(FlashcardReview).where(*conds).order_by(FlashcardReview.due_at).limit(limit)
     )
     return list(result.scalars().all())
+
+
+# ---------------------------------------------------------------------------
+# Question attempts + per-unit mastery analytics
+# ---------------------------------------------------------------------------
+
+async def record_attempts(db: AsyncSession, user_id: uuid.UUID, attempts: list[dict]) -> None:
+    """Append a batch of answered questions. Each dict: subject, grade, unit, topic, correct."""
+    if not attempts:
+        return
+    db.add_all([
+        QuestionAttempt(
+            user_id=user_id, subject=a["subject"], grade=a.get("grade"),
+            unit=a.get("unit"), topic=a.get("topic"), correct=a["correct"],
+        )
+        for a in attempts
+    ])
+    await db.commit()
+
+
+async def get_mastery(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    subject: str | None = None,
+) -> list[dict]:
+    """Per-(subject, grade, unit) accuracy, weakest first. Grade/unit may be null."""
+    conds = [QuestionAttempt.user_id == user_id]
+    if subject:
+        conds.append(QuestionAttempt.subject == subject)
+    total = func.count()
+    correct = func.sum(cast(QuestionAttempt.correct, Integer))
+    result = await db.execute(
+        select(QuestionAttempt.subject, QuestionAttempt.grade, QuestionAttempt.unit,
+               total.label("total"), correct.label("correct"))
+        .where(*conds)
+        .group_by(QuestionAttempt.subject, QuestionAttempt.grade, QuestionAttempt.unit)
+    )
+    rows = [
+        {"subject": s, "grade": g, "unit": u, "total": t, "correct": int(c or 0),
+         "accuracy": round((int(c or 0) / t) * 100) if t else 0}
+        for s, g, u, t, c in result.all()
+    ]
+    rows.sort(key=lambda r: r["accuracy"])  # weakest first
+    return rows
 
 
 # ---------------------------------------------------------------------------
