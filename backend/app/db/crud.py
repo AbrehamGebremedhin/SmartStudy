@@ -381,7 +381,12 @@ async def record_flashcard_review(
         )
     )
     await db.commit()
-    return await db.get(FlashcardReview, (user_id, key))  # type: ignore[return-value]
+    # The upsert runs via Core, so the ORM instance loaded above is stale after
+    # commit (expire_on_commit=False). Refresh it to return the written box/due,
+    # not the pre-update values.
+    row = await db.get(FlashcardReview, (user_id, key))
+    await db.refresh(row)
+    return row  # type: ignore[return-value]
 
 
 async def get_due_flashcards(
