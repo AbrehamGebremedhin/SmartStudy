@@ -223,6 +223,32 @@ class FlashcardReview(Base):
     last_rated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class Mistake(Base):
+    """A question the user answered wrong, kept until they get it right on review.
+
+    Row exists = unresolved. No Leitner ladder: a mistake is drilled until correct,
+    then deleted (if they miss it again later it just comes back). `card_key` is a
+    hash of the question text (see app/services/srs.py). The full question is
+    snapshotted as JSONB so the review deck renders without regenerating.
+    """
+
+    __tablename__ = "mistakes"
+    __table_args__ = (
+        Index("ix_mistakes_user_created", "user_id", "created_at"),
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), primary_key=True)
+    card_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+    source: Mapped[str] = mapped_column(String, nullable=False)   # mcq | exam
+    subject: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    topic: Mapped[str | None] = mapped_column(String, nullable=True)
+    question: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
     __table_args__ = (

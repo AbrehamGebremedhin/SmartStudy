@@ -10,6 +10,7 @@ import ErrorState from '../components/ui/ErrorState'
 import { saveGeneration, loadGeneration, updateGeneration } from '../lib/genStorage'
 import { awardXP, recordLastGen, resultMessage } from '../lib/gamification'
 import { useGenerationWS } from '../hooks/useGenerationWS'
+import { recordMistake } from '../services/mistakes.service'
 
 const MCQ_STAGES = [
   { id: 'validating',      label: 'Validating parameters…' },
@@ -132,9 +133,11 @@ export default function MCQ() {
       ? questions.filter((q, i) => newSelected[i] === q.correct_answer).length
       : 0
 
+    const isCorrect = letter === questions[qi]?.correct_answer
+    if (!isCorrect && questions[qi]) recordMistake('mcq', config.subject, questions[qi])
+
     let gainedNow = 0
     if (!isRetake) {
-      const isCorrect = letter === questions[qi]?.correct_answer
       gainedNow += awardXP(isCorrect ? 'mcq_correct' : 'mcq_incorrect', { subject: config.subject }).gained
       if (allDone) {
         gainedNow += awardXP('quiz_complete', { correct, total: questions.length, subject: config.subject }).gained

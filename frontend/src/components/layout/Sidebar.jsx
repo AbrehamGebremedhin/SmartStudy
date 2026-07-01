@@ -10,6 +10,7 @@ const NAV_ITEMS = [
   { to: '/mcq', label: 'MCQ Quiz', icon: 'quiz' },
   { to: '/mock-exam', label: 'Mock Exam', icon: 'file-text' },
   { to: '/flashcards', label: 'Flashcards', icon: 'cards' },
+  { to: '/review', label: 'Review Mistakes', icon: 'target' },
   { to: '/notes', label: 'Study Notes', icon: 'notes' },
   { to: '/chat', label: 'AI Tutor', icon: 'tutor' },
 ]

@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.models import (ChatMessage, ChatSession, ExamQuestion, FlashcardReview, Generation,
-                           SecurityEvent, User, UserGeneration, UserProgress)
+                           Mistake, SecurityEvent, User, UserGeneration, UserProgress)
 from app.services import srs
 
 
@@ -61,15 +61,24 @@ async def get_pooled_items(
     topic_hash: str,
     generation_type: str,
     item_key: str,
+    max_generations: int = 30,
 ) -> list:
-    """Return all items from every generation sharing the given topic hash."""
+    """Return items from the most recent generations sharing the given topic hash.
+
+    Capped so a popular topic doesn't pull an ever-growing set of full JSONB
+    content rows into memory each request. Recent bias is fine (fresher items);
+    the caller dedups and samples anyway.
+    ponytail: newest-N cap; raise it if pools feel too shallow.
+    """
     result = await db.execute(
-        select(Generation)
+        select(Generation.content)
         .where(Generation.request_hash == topic_hash, Generation.type == generation_type)
+        .order_by(Generation.created_at.desc())
+        .limit(max_generations)
     )
     items = []
-    for gen in result.scalars().all():
-        items.extend(gen.content.get(item_key, []))
+    for content in result.scalars().all():
+        items.extend(content.get(item_key, []))
     return items
 
 
@@ -387,6 +396,65 @@ async def get_due_flashcards(
         select(FlashcardReview).where(*conds).order_by(FlashcardReview.due_at).limit(limit)
     )
     return list(result.scalars().all())
+
+
+# ---------------------------------------------------------------------------
+# Mistake bank (wrong-answered questions, re-served until mastered)
+# ---------------------------------------------------------------------------
+
+async def record_mistake(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    source: str,
+    subject: str | None,
+    topic: str | None,
+    question: dict,
+) -> None:
+    """Upsert a mistake keyed by question text; refresh last_seen_at on repeat."""
+    key = srs.card_key(question.get("question", ""))
+    await db.execute(
+        pg_insert(Mistake)
+        .values(user_id=user_id, card_key=key, source=source,
+                subject=subject, topic=topic, question=question)
+        .on_conflict_do_update(
+            index_elements=["user_id", "card_key"],
+            set_={"last_seen_at": datetime.now(timezone.utc), "question": question},
+        )
+    )
+    await db.commit()
+
+
+async def get_mistakes(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    subject: str | None = None,
+    limit: int = 20,
+) -> list[Mistake]:
+    conds = [Mistake.user_id == user_id]
+    if subject:
+        conds.append(Mistake.subject == subject)
+    result = await db.execute(
+        select(Mistake).where(*conds).order_by(Mistake.created_at).limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def count_mistakes(db: AsyncSession, user_id: uuid.UUID) -> int:
+    return (await db.execute(
+        select(func.count()).select_from(Mistake).where(Mistake.user_id == user_id)
+    )).scalar_one()
+
+
+async def resolve_mistake(db: AsyncSession, user_id: uuid.UUID, front: str) -> bool:
+    """Delete a mastered mistake. Returns True if a row was removed."""
+    key = srs.card_key(front)
+    result = await db.execute(
+        Mistake.__table__.delete().where(
+            Mistake.user_id == user_id, Mistake.card_key == key
+        )
+    )
+    await db.commit()
+    return result.rowcount > 0
 
 
 # ---------------------------------------------------------------------------

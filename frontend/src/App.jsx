@@ -15,6 +15,7 @@ import Flashcards from './pages/Flashcards'
 import Notes from './pages/Notes'
 import Chat from './pages/Chat'
 import History from './pages/History'
+import Review from './pages/Review'
 
 function AppShell() {
   return (
@@ -27,6 +28,7 @@ function AppShell() {
           <Route path="/mcq" element={<MCQ />} />
           <Route path="/mock-exam" element={<MockExam />} />
           <Route path="/flashcards" element={<Flashcards />} />
+          <Route path="/review" element={<Review />} />
           <Route path="/notes" element={<Notes />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/chat/:sessionId" element={<Chat />} />

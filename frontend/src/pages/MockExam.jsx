@@ -5,6 +5,7 @@ import EmptyState from '../components/ui/EmptyState'
 import ErrorState from '../components/ui/ErrorState'
 import Confetti from '../components/ui/Confetti'
 import { awardXP, resultMessage } from '../lib/gamification'
+import { recordMistake } from '../services/mistakes.service'
 
 // ponytail: no history/genStorage persistence in v1 — a mock exam is a one-off sitting.
 // Timer is in-memory; a refresh restarts the exam. Add persistence only if asked.
@@ -88,8 +89,9 @@ export default function MockExam() {
     const correct = questions.filter((q, i) => selected[i] === q.correct_answer).length
     let gained = 0
     questions.forEach((q, i) => {
-      gained += awardXP(selected[i] === q.correct_answer ? 'mcq_correct' : 'mcq_incorrect',
-        { subject: config.subject }).gained
+      const right = selected[i] === q.correct_answer
+      gained += awardXP(right ? 'mcq_correct' : 'mcq_incorrect', { subject: config.subject }).gained
+      if (!right) recordMistake('exam', config.subject, q)  // wrong or blank → drill it
     })
     gained += awardXP('quiz_complete', { correct, total: questions.length, subject: config.subject }).gained
     setXpEarned(gained)
