@@ -1,8 +1,34 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    // Installable + offline app shell. Generated notes/cards already live in
+    // localStorage, so once the shell is precached they render with no network.
+    // API calls aren't cached (generation needs the network anyway).
+    VitePWA({
+      registerType: 'autoUpdate',
+      manifest: {
+        name: 'SmartStudy — ብልሃት ትምህርቲ',
+        short_name: 'SmartStudy',
+        description: 'AI study companion for the Ethiopian curriculum and EUEE prep.',
+        theme_color: '#1E1610',
+        background_color: '#1E1610',
+        display: 'standalone',
+        start_url: '/',
+        icons: [
+          { src: '/favicon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' },
+        ],
+      },
+      workbox: {
+        // Precache the built shell; fall back to index.html for SPA routes offline.
+        navigateFallback: '/index.html',
+        navigateFallbackDenylist: [/^\/api/, /^\/static/],
+      },
+    }),
+  ],
   server: {
     port: 5173,
     proxy: {

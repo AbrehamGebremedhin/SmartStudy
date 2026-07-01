@@ -24,4 +24,5 @@ test_results/
 
 # frontend build files
 frontend/dist/
+frontend/dev-dist/
 frontend/node_modules/
