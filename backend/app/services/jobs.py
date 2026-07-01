@@ -41,6 +41,20 @@ BASE_BACKOFF_SECONDS = 2      # retry waits BASE * 2**(attempts-1), capped
 Handler = Callable[[dict], Awaitable[dict]]
 HANDLERS: dict[str, Handler] = {}
 
+# In-process wakeups so submit_and_wait doesn't poll the DB every 0.25s. The
+# worker that finishes a job runs in the same process as the waiter (single
+# instance), so it can set the waiter's event directly. For multi-instance —
+# where the finishing worker lives in another process and the local event never
+# fires — submit_and_wait still re-checks the DB on a slow fallback interval.
+# ponytail: in-process events, LISTEN/NOTIFY only if you actually run multi-instance
+_waiters: dict[uuid.UUID, asyncio.Event] = {}
+
+
+def _wake(job_id: uuid.UUID) -> None:
+    ev = _waiters.get(job_id)
+    if ev is not None:
+        ev.set()
+
 
 class JobFailed(Exception):
     """Raised by submit_and_wait when a job exhausts its retries."""
@@ -69,23 +83,37 @@ async def get_job(job_id: uuid.UUID) -> dict:
 
 
 async def submit_and_wait(job_type: str, payload: dict,
-                          timeout: float = 300.0, poll: float = 0.25) -> dict:
+                          timeout: float = 300.0, fallback_poll: float = 2.0) -> dict:
     """Submit a job and block until it finishes. Returns the handler's result dict.
+
+    Woken instantly by the finishing worker (same process); the fallback_poll
+    interval only bounds latency for the multi-instance case where the event
+    never fires locally.
 
     Raises OutOfContextError (preserved across the queue boundary), JobFailed on
     exhausted retries, or TimeoutError.
     """
     job_id = await submit(job_type, payload)
+    ev = asyncio.Event()
+    _waiters[job_id] = ev
     deadline = asyncio.get_event_loop().time() + timeout
-    while True:
-        st = await _job_state(job_id)
-        if st["status"] == JobStatus.done.value:
-            return st["result"]
-        if st["status"] == JobStatus.failed.value:
-            _raise_failure(st["error"])
-        if asyncio.get_event_loop().time() > deadline:
-            raise TimeoutError(f"job {job_id} did not finish within {timeout}s")
-        await asyncio.sleep(poll)
+    try:
+        while True:
+            st = await _job_state(job_id)
+            if st["status"] == JobStatus.done.value:
+                return st["result"]
+            if st["status"] == JobStatus.failed.value:
+                _raise_failure(st["error"])
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                raise TimeoutError(f"job {job_id} did not finish within {timeout}s")
+            ev.clear()
+            try:
+                await asyncio.wait_for(ev.wait(), timeout=min(fallback_poll, remaining))
+            except asyncio.TimeoutError:
+                pass  # fallback tick — loop and re-check the DB
+    finally:
+        _waiters.pop(job_id, None)
 
 
 def _raise_failure(error: str | None) -> None:
@@ -159,6 +187,7 @@ async def _finish(job_id: uuid.UUID, status: str, result: dict | None = None,
         await db.execute(update(Job).where(Job.id == job_id).values(
             status=status, result=result, error=error, locked_at=None))
         await db.commit()
+    _wake(job_id)  # terminal state — wake any local waiter immediately
 
 
 async def _retry(job_id: uuid.UUID, error: str, backoff: float) -> None:

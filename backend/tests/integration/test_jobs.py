@@ -61,6 +61,29 @@ async def test_skip_locked_no_double_claim():
     assert len(claimed) == 1
 
 
+async def test_submit_and_wait_woken_by_finish():
+    """With a 60s fallback poll, submit_and_wait can only return in time via the
+    in-process event set by _finish — proves the wake path, not DB polling."""
+    jobs.register("test_wake", lambda p: asyncio.sleep(0, {"v": p["v"]}))
+
+    async def worker():
+        while True:
+            claim = await jobs._claim_one()
+            if claim:
+                await jobs._process(claim)
+                return
+            await asyncio.sleep(0.02)
+
+    result, _ = await asyncio.wait_for(
+        asyncio.gather(
+            jobs.submit_and_wait("test_wake", {"v": 42}, fallback_poll=60.0),
+            worker(),
+        ),
+        timeout=10.0,
+    )
+    assert result == {"v": 42}
+
+
 async def test_failure_exhausts_retries():
     async def always_fail(payload):
         raise RuntimeError("nope")
