@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { ALL_SUBJECTS } from '../lib/curriculum'
 import Icon from '../components/ui/Icon'
 import { awardXP } from '../lib/gamification'
@@ -15,6 +15,9 @@ import {
 export default function Chat() {
   const { sessionId } = useParams()
   const navigate = useNavigate()
+  const location = useLocation()
+  const seedRef = useRef(false)  // guard against StrictMode double-run
+  const [pendingAsk, setPendingAsk] = useState(null)
 
   const [sessions, setSessions] = useState([])
   const [sessionsLoading, setSessionsLoading] = useState(true)
@@ -38,6 +41,31 @@ export default function Chat() {
       .finally(() => setSessionsLoading(false))
   }, [])
 
+  // Seeded from an "Ask tutor" button: create a fresh session for the question's
+  // subject, stash the question, and jump to that session (which auto-sends it).
+  useEffect(() => {
+    const ask = location.state?.ask
+    if (!ask || sessionId || seedRef.current) return
+    seedRef.current = true
+    createSession({ subject: location.state.subject || 'biology' })
+      .then(session => {
+        setSessions(ss => [session, ...ss])
+        sessionStorage.setItem(`pending_${session.id}`, ask)
+        navigate(`/chat/${session.id}`, { replace: true })
+      })
+      .catch(() => { seedRef.current = false })
+  }, [location.state, sessionId, navigate])
+
+  // Once a seeded session is loaded, fire the stashed question through handleSend.
+  useEffect(() => {
+    if (pendingAsk && activeSession && !sending) {
+      const text = pendingAsk
+      setPendingAsk(null)
+      setMessages(m => [...m, { role: 'user', content: text, id: Date.now() }])
+      handleSend(text)  // string arg → sends without re-appending the bubble
+    }
+  }, [pendingAsk, activeSession, sending]) // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (sessionId) {
       // Restore from sessionStorage immediately if available
@@ -59,6 +87,12 @@ export default function Chat() {
       getSession(sessionId).then(s => {
         setActiveSession(s)
         setMessages(s.messages ?? [])
+        // Seeded "Ask tutor" question stashed for this fresh session — send it now.
+        const pending = sessionStorage.getItem(`pending_${sessionId}`)
+        if (pending) {
+          sessionStorage.removeItem(`pending_${sessionId}`)
+          setPendingAsk(pending)
+        }
         // If no cached context and session has messages, fetch grade/unit from vector DB
         if (!hasCached && (s.messages?.length ?? 0) > 0) {
           getSessionContext(sessionId).then(ctx => {
@@ -70,10 +104,10 @@ export default function Chat() {
           }).catch(() => {})
         }
       }).catch(console.error)
-    } else if (sessions.length > 0) {
+    } else if (sessions.length > 0 && !location.state?.ask) {
       navigate(`/chat/${sessions[0].id}`, { replace: true })
     }
-  }, [sessionId, sessions, navigate])
+  }, [sessionId, sessions, navigate]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })

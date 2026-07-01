@@ -1,16 +1,19 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import Icon from '../components/ui/Icon'
 import EmptyState from '../components/ui/EmptyState'
 import ErrorState from '../components/ui/ErrorState'
 import LoadingState from '../components/ui/LoadingState'
 import { awardXP } from '../lib/gamification'
 import { getMistakes, resolveMistake } from '../services/mistakes.service'
+import { askAboutQuestion } from '../lib/askTutor'
 
 // Drill wrong-answered questions until you get them right; a correct answer
 // removes the card from the bank. Cards come pre-normalized from the backend
 // (options: [{ letter, text, image_url }]), so one render path covers both
 // MCQ- and exam-sourced mistakes.
 export default function Review() {
+  const navigate = useNavigate()
   const [cards, setCards] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -21,7 +24,7 @@ export default function Review() {
     setError(null)
     setState({})
     getMistakes()
-      .then(list => setCards(list.map(m => m.question)))
+      .then(list => setCards(list.map(m => ({ ...m.question, __subject: m.subject }))))
       .catch(setError)
       .finally(() => setLoading(false))
   }
@@ -99,6 +102,10 @@ export default function Review() {
                       Why your choice is wrong: {q.incorrect_explanations[st.selected]}
                     </div>
                   )}
+                  <button className="btn btn-ghost btn-sm" style={{ marginTop: 10 }}
+                          onClick={() => askAboutQuestion(navigate, q.__subject, q)}>
+                    <Icon name="tutor" size={14} /> Ask tutor about this
+                  </button>
                 </div>
               )}
             </div>

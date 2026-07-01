@@ -12,6 +12,7 @@ import { awardXP, recordLastGen, resultMessage } from '../lib/gamification'
 import { useGenerationWS } from '../hooks/useGenerationWS'
 import { recordMistake } from '../services/mistakes.service'
 import { recordAttempts } from '../services/analytics.service'
+import { askAboutQuestion } from '../lib/askTutor'
 
 const MCQ_STAGES = [
   { id: 'validating',      label: 'Validating parameters…' },
@@ -336,6 +337,10 @@ export default function MCQ() {
                         Why your choice is wrong: {q.incorrect_explanations[userAnswer]}
                       </div>
                     )}
+                    <button className="btn btn-ghost btn-sm" style={{ marginTop: 10 }}
+                            onClick={() => askAboutQuestion(navigate, config.subject, q)}>
+                      <Icon name="tutor" size={14} /> Ask tutor about this
+                    </button>
                   </div>
                 )}
               </div>

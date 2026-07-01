@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../services/apiClient'
 import Icon from '../components/ui/Icon'
 import EmptyState from '../components/ui/EmptyState'
@@ -7,6 +8,7 @@ import Confetti from '../components/ui/Confetti'
 import { awardXP, resultMessage } from '../lib/gamification'
 import { recordMistake } from '../services/mistakes.service'
 import { recordAttempts } from '../services/analytics.service'
+import { askAboutQuestion } from '../lib/askTutor'
 
 // ponytail: no history/genStorage persistence in v1 — a mock exam is a one-off sitting.
 // Timer is in-memory; a refresh restarts the exam. Add persistence only if asked.
@@ -17,6 +19,7 @@ function fmtTime(s) {
 }
 
 export default function MockExam() {
+  const navigate = useNavigate()
   const [subjects, setSubjects] = useState([])
   const [config, setConfig] = useState({ subject: '' })
   const [questions, setQuestions] = useState([])
@@ -274,6 +277,10 @@ export default function MockExam() {
                         <strong>Working:</strong> {q.workout_steps}
                       </div>
                     )}
+                    <button className="btn btn-ghost btn-sm" style={{ marginTop: 10 }}
+                            onClick={() => askAboutQuestion(navigate, config.subject, q)}>
+                      <Icon name="tutor" size={14} /> Ask tutor about this
+                    </button>
                   </div>
                 )}
               </div>
