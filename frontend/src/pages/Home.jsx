@@ -8,6 +8,9 @@ import CountUp from '../components/ui/CountUp'
 import { GRADES, getDaysUntilEUEE, subjectLabel, typeIcon } from '../lib/curriculum'
 import { getLevelInfo, getStreak, getStats, getLastActivity } from '../lib/gamification'
 import { getHistory } from '../services/history.service'
+import { getMastery } from '../services/analytics.service'
+import { getMistakeCount } from '../services/mistakes.service'
+import { api } from '../services/apiClient'
 import { loadGeneration, routeForType } from '../lib/genStorage'
 
 function relTime(iso) {
@@ -100,6 +103,8 @@ export default function Home() {
         </div>
       </div>
 
+      <TodayCard navigate={navigate} />
+
       <ContinueCard lastGen={lastGen} navigate={navigate} />
 
       <div className="mode-bar anim">
@@ -161,6 +166,58 @@ export default function Home() {
         exclude={['general_business']}
         onSelect={() => navigate('/mcq')}
       />
+    </div>
+  )
+}
+
+// Daily focus: the concrete things waiting for the student right now. Turns the
+// passive streak/XP into a return hook. Each row is fully actionable; the card
+// hides itself when nothing is pending.
+function TodayCard({ navigate }) {
+  const [due, setDue] = useState(0)
+  const [mistakes, setMistakes] = useState(0)
+  const [weakest, setWeakest] = useState(null)
+
+  useEffect(() => {
+    api.get('/flashcards/due?limit=100').then(d => setDue(d.length)).catch(() => {})
+    getMistakeCount().then(r => setMistakes(r.count)).catch(() => {})
+    getMastery().then(rows => {
+      const w = rows.find(r => r.total >= 3 && r.accuracy < 100)
+      if (w) setWeakest(w)
+    }).catch(() => {})
+  }, [])
+
+  const items = []
+  if (due > 0) items.push({
+    icon: 'cards', label: `${due} flashcard${due === 1 ? '' : 's'} due for review`,
+    badge: due, onClick: () => navigate('/flashcards'),
+  })
+  if (mistakes > 0) items.push({
+    icon: 'target', label: `${mistakes} mistake${mistakes === 1 ? '' : 's'} to drill`,
+    badge: mistakes, onClick: () => navigate('/review'),
+  })
+  if (weakest) {
+    const loc = [subjectLabel(weakest.subject), weakest.unit ? `Unit ${weakest.unit}` : ''].filter(Boolean).join(' · ')
+    items.push({
+      icon: 'quiz', label: `Weakest: ${loc} (${weakest.accuracy}%)`, badge: null,
+      onClick: () => navigate(`/mcq?subject=${weakest.subject}${weakest.grade ? `&grade=${weakest.grade}` : ''}${weakest.unit ? `&unit=${encodeURIComponent(weakest.unit)}` : ''}`),
+    })
+  }
+  if (items.length === 0) return null
+
+  return (
+    <div className="weak-areas anim">
+      <div className="weak-title"><Icon name="flame" size={15} /> Today's focus</div>
+      <ul className="weak-list">
+        {items.map((it, i) => (
+          <li key={i} className="weak-row" role="button" tabIndex={0}
+              onClick={it.onClick}
+              onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), it.onClick())}>
+            <span><Icon name={it.icon} size={14} /> {it.label}</span>
+            {it.badge != null && <span className="weak-count">{it.badge}</span>}
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }
