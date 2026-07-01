@@ -1,9 +1,10 @@
-import { useState } from 'react'
-import { NavLink } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { NavLink, useLocation } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import Icon from '../ui/Icon'
 import Stele from '../ui/Stele'
 import { getLevelInfo } from '../../lib/gamification'
+import { getMistakeCount } from '../../services/mistakes.service'
 
 const NAV_ITEMS = [
   { to: '/', label: 'Home', icon: 'home', end: true },
@@ -19,6 +20,13 @@ export default function Sidebar() {
   const { user, logout } = useAuth()
   const initial = user?.name?.[0]?.toUpperCase() ?? 'S'
   const [level] = useState(() => getLevelInfo())
+  const [mistakes, setMistakes] = useState(0)
+  const location = useLocation()
+
+  // Refetch on every route change so the badge drops as mistakes get resolved.
+  useEffect(() => {
+    getMistakeCount().then(r => setMistakes(r.count)).catch(() => {})
+  }, [location.pathname])
 
   return (
     <div className="d-side">
@@ -41,6 +49,9 @@ export default function Sidebar() {
           >
             <span className="ds-ico"><Icon name={icon} size={17} /></span>
             {label}
+            {to === '/review' && mistakes > 0 && (
+              <span className="ds-badge">{mistakes > 99 ? '99+' : mistakes}</span>
+            )}
           </NavLink>
         ))}
 

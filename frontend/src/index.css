@@ -191,6 +191,18 @@ body {
   border-radius: 0 2px 2px 0;
 }
 .ds-ico { width: 20px; display: flex; align-items: center; justify-content: center; }
+.ds-badge {
+  margin-left: auto;
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--vermillion);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  line-height: 18px;
+}
 .ds-foot {
   padding: 16px 18px;
   position: relative;
