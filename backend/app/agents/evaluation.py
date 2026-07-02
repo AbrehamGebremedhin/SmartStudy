@@ -56,7 +56,7 @@ class EvalMixin:
             if note is not None:
                 context_str = self._extract_note_eval_context(note, question["question"])
             else:
-                context_response = await self.context_agent.query_db(
+                context_response = await self.context_agent.query_documents_only(
                     subject=subject, question=question["question"], type_req="chat"
                 )
                 if context_response.error:

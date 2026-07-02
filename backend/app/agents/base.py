@@ -29,7 +29,11 @@ class GenerationBase:
         if not api_key:
             raise ValueError("DEEPSEEK_API_KEY not found in environment")
 
-        self.llm = ChatDeepSeek(model="deepseek-v4-flash", api_key=api_key)
+        # temperature 0.3: low enough to cut variance-driven validation/top-up retries on
+        # the strict JSON-schema + uniqueness rules in prompts.py, high enough to keep
+        # question/flashcard wording varied across a set (unlike enrich_questions.py's
+        # temp=0, which is tuned for single-answer factual accuracy, not varied generation).
+        self.llm = ChatDeepSeek(model="deepseek-v4-flash", api_key=api_key, temperature=0.3)
         self._json_llm = self.llm.bind(response_format={"type": "json_object"})
         self.context_agent = ContextRefinementAgent()
         self.validation_agent = ValidationAgent()

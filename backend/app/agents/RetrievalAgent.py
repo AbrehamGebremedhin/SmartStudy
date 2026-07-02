@@ -6,6 +6,7 @@ from langchain_core.documents import Document
 from langchain_ollama import OllamaEmbeddings
 from pymilvus import MilvusClient
 
+from app.core.curriculum_validation import KNOWN_SUBJECTS, VALID_COMBINATIONS
 from app.core.exceptions import OutOfContextError
 
 logging.basicConfig(level=logging.INFO)
@@ -19,37 +20,39 @@ class RetrievalAgentError(Exception):
     pass
 
 
+def _dedupe_similar(documents: List[Document], threshold: float = 0.75) -> List[Document]:
+    """Drop near-duplicate chunks using word-shingle Jaccard similarity.
+
+    CHUNK_OVERLAP=200 on CHUNK_SIZE=1000 (dataloader.py) means adjacent chunks from the
+    same source share ~20% of their text verbatim, and top-k retrieval on a single query
+    embedding tends to pull several such neighbours back together. Milvus results arrive
+    ranked by relevance, so the first (highest-similarity) chunk in a near-duplicate
+    cluster is kept and later ones are dropped — trims redundant context before it reaches
+    the generation prompt, cheaper than reranking with a second embedding call.
+    ponytail: O(k^2) shingle comparison — fine at k<=75 (current retrieval sizes); switch
+    to a real reranker/MMR if k grows into the hundreds.
+    """
+    kept: List[Document] = []
+    kept_shingles: List[set] = []
+    for doc in documents:
+        words = doc.page_content.split()
+        shingles = {" ".join(words[i:i + 5]) for i in range(max(1, len(words) - 4))}
+        if any(
+            shingles and other and len(shingles & other) / len(shingles | other) >= threshold
+            for other in kept_shingles
+        ):
+            continue
+        kept.append(doc)
+        kept_shingles.append(shingles)
+    return kept
+
+
 class RetrievalAgent:
     MAX_RETRIES = 3
     RETRY_DELAY = 1
 
-    VALID_COMBINATIONS = {
-        12: {
-            'biology': 6, 'chemistry': 5, 'civics': 10, 'economics': 8,
-            'english': 10, 'general_business': 4, 'geography': 8,
-            'history': 9, 'maths': 9, 'physics': 5
-        },
-        11: {
-            'biology': 6, 'chemistry': 6, 'civics': 11, 'economics': 6,
-            'english': 10, 'general_business': 4, 'geography': 8,
-            'history': 9, 'maths': 8, 'physics': 7
-        },
-        10: {
-            'biology': 5, 'chemistry': 6, 'civics': 8, 'economics': 8,
-            'english': 10, 'geography': 8, 'history': 9, 'maths': 7,
-            'physics': 6
-        },
-        9: {
-            'biology': 6, 'chemistry': 5, 'civics': 8, 'economics': 7,
-            'english': 12, 'geography': 8, 'history': 9, 'maths': 9,
-            'physics': 7
-        }
-    }
-
-    KNOWN_SUBJECTS = {
-        "biology", "chemistry", "civics", "economics", "english",
-        "general_business", "geography", "history", "maths", "physics", "sat"
-    }
+    VALID_COMBINATIONS = VALID_COMBINATIONS
+    KNOWN_SUBJECTS = KNOWN_SUBJECTS
 
     def __init__(self, milvus_uri: str = MILVUS_URI):
         self.client = MilvusClient(uri=milvus_uri)
@@ -168,7 +171,12 @@ class RetrievalAgent:
                     for hit in results[0]
                 ]
 
-                logger.info(f"Retrieved {len(documents)} documents for subject={subject}")
+                before = len(documents)
+                documents = _dedupe_similar(documents)
+                logger.info(
+                    "Retrieved %d documents for subject=%s (%d after near-dup filter)",
+                    before, subject, len(documents),
+                )
                 return documents
 
             except Exception as e:

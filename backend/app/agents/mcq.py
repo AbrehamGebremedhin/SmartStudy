@@ -82,11 +82,9 @@ class MCQMixin:
             ])
 
             chain = prompt | self._json_llm | StrOutputParser()
-            areas = context_response.parsed_answer.get("areas", [])
             # Over-generate by a small buffer so the top-up loop is rarely needed.
             generate_count = num_questions + max(2, num_questions // 4)
             base_args = {
-                "areas": areas,
                 "num_questions": generate_count,
                 "subject_rules": subject_rules,
                 "subject_guidance": subject_guidance,
@@ -117,7 +115,7 @@ class MCQMixin:
                 qs = parsed.get("questions", [])
                 if not qs:
                     return []
-                vr = await self.validation_agent.validate_mcqs(qs, doc_slice[:12], areas)
+                vr = await self.validation_agent.validate_mcqs(qs, doc_slice[:12])
                 return vr["valid_mcqs"]
 
             _t0 = time.perf_counter()

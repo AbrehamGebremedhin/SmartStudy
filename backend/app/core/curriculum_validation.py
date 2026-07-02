@@ -28,6 +28,11 @@ VALID_COMBINATIONS: dict[int, dict[str, int]] = {
 # Subjects that span all grades (no grade/unit filtering applies)
 CROSS_GRADE_SUBJECTS = {"sat", "english"}
 
+# All valid subjects across every grade, plus the cross-grade ones.
+KNOWN_SUBJECTS: frozenset[str] = frozenset(
+    CROSS_GRADE_SUBJECTS | {s for grade in VALID_COMBINATIONS.values() for s in grade}
+)
+
 
 def validate_curriculum_params(
     subject: str,

@@ -83,11 +83,9 @@ class FlashcardMixin:
             ])
 
             chain = prompt | self._json_llm | StrOutputParser()
-            areas = context_response.parsed_answer.get("areas", [])
             # Over-generate by a small buffer so the top-up loop is rarely needed.
             generate_count = num_cards + max(2, num_cards // 4)
             base_args = {
-                "areas": areas,
                 "num_cards": generate_count,
                 "difficulty": difficulty,
                 "subject_rules": subject_rules,
@@ -129,12 +127,11 @@ class FlashcardMixin:
             # and the dedup/filter pass below, so we don't block the response on it.
             _validation_cards = list(valid_cards)
             _validation_ctx = docs[:12]
-            _validation_areas = areas
 
             async def _bg_validate_flashcards():
                 _t = time.perf_counter()
                 r = await self.validation_agent.validate_flashcards(
-                    _validation_cards, _validation_ctx, _validation_areas
+                    _validation_cards, _validation_ctx
                 )
                 self.logger.info("[flashcard] bg-validation: %.2fs | valid=%d/%d",
                                  time.perf_counter() - _t,

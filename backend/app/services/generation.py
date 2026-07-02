@@ -134,7 +134,7 @@ async def run_chat_context(subject: str, grade: int | None, title: str) -> dict:
     from collections import Counter
     gen_agent = get_agent()
     question = title if title and title != "New Chat" else f"context for {subject}"
-    ctx = await gen_agent.context_agent.query_db(
+    ctx = await gen_agent.context_agent.query_documents_only(
         subject=subject, question=question, grade=grade, unit=None, type_req="chat"
     )
     if ctx.error or not isinstance(ctx.context, list) or not ctx.context:

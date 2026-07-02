@@ -30,7 +30,7 @@ class ChatMixin:
             chat_history = chat_history_str or session.get_recent_context()
             session.add_message("user", question)
 
-            context_response = await self.context_agent.query_db(
+            context_response = await self.context_agent.query_documents_only(
                 subject=subject, question=question,
                 grade=session.grade, unit=None, type_req="chat"
             )
@@ -55,7 +55,6 @@ class ChatMixin:
             response = await chain.ainvoke({
                 "context": format_docs(context_response.context),
                 "question": question,
-                "keypoints": context_response.parsed_answer.get("keypoints", []),
                 "chat_history": chat_history,
                 "current_title": session.title,
                 "subject": session.subject,
