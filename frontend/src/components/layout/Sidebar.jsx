@@ -5,13 +5,14 @@ import Icon from '../ui/Icon'
 import Stele from '../ui/Stele'
 import { getLevelInfo } from '../../lib/gamification'
 import { getMistakeCount } from '../../services/mistakes.service'
+import { getTheme, setTheme } from '../../lib/theme'
 
 const NAV_ITEMS = [
   { to: '/', label: 'Home', icon: 'home', end: true },
   { to: '/mcq', label: 'MCQ Quiz', icon: 'quiz' },
   { to: '/mock-exam', label: 'Mock Exam', icon: 'file-text' },
   { to: '/flashcards', label: 'Flashcards', icon: 'cards' },
-  { to: '/review', label: 'Review Mistakes', icon: 'target' },
+  { to: '/review', label: 'Review', icon: 'target' },
   { to: '/notes', label: 'Study Notes', icon: 'notes' },
   { to: '/chat', label: 'AI Tutor', icon: 'tutor' },
 ]
@@ -21,7 +22,14 @@ export default function Sidebar() {
   const initial = user?.name?.[0]?.toUpperCase() ?? 'S'
   const [level] = useState(() => getLevelInfo())
   const [mistakes, setMistakes] = useState(0)
+  const [theme, setThemeState] = useState(() => getTheme())
   const location = useLocation()
+
+  function toggleTheme() {
+    const next = theme === 'dark' ? 'light' : 'dark'
+    setTheme(next)
+    setThemeState(next)
+  }
 
   // Refetch on every route change so the badge drops as mistakes get resolved.
   useEffect(() => {
@@ -75,6 +83,10 @@ export default function Sidebar() {
             <div className="ds-user-level">{level.geez} · {level.translation}</div>
           </div>
         </div>
+        <button className="ds-btn" onClick={toggleTheme}>
+          <span className="ds-ico"><Icon name={theme === 'dark' ? 'sun' : 'moon'} size={17} /></span>
+          {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+        </button>
         <button className="ds-btn ds-logout" onClick={logout}>
           <span className="ds-ico"><Icon name="logout" size={17} /></span>
           Sign out

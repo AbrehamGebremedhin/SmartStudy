@@ -6,7 +6,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.db.models import (ChatMessage, ChatSession, ExamQuestion, FlashcardReview, Generation,
+from app.db.models import (Bookmark, ChatMessage, ChatSession, ExamQuestion, FlashcardReview, Generation,
                            Mistake, QuestionAttempt, SecurityEvent, User, UserGeneration,
                            UserProgress)
 from app.services import srs
@@ -501,6 +501,55 @@ async def resolve_mistake(db: AsyncSession, user_id: uuid.UUID, front: str) -> b
     result = await db.execute(
         Mistake.__table__.delete().where(
             Mistake.user_id == user_id, Mistake.card_key == key
+        )
+    )
+    await db.commit()
+    return result.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Bookmarks (user-starred questions, kept until unstarred)
+# ---------------------------------------------------------------------------
+
+async def add_bookmark(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    source: str,
+    subject: str | None,
+    topic: str | None,
+    question: dict,
+) -> None:
+    key = srs.card_key(question.get("question", ""))
+    await db.execute(
+        pg_insert(Bookmark)
+        .values(user_id=user_id, card_key=key, source=source,
+                subject=subject, topic=topic, question=question)
+        .on_conflict_do_nothing(index_elements=["user_id", "card_key"])
+    )
+    await db.commit()
+
+
+async def get_bookmarks(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    subject: str | None = None,
+    limit: int = 50,
+) -> list[Bookmark]:
+    conds = [Bookmark.user_id == user_id]
+    if subject:
+        conds.append(Bookmark.subject == subject)
+    result = await db.execute(
+        select(Bookmark).where(*conds).order_by(Bookmark.created_at.desc()).limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def remove_bookmark(db: AsyncSession, user_id: uuid.UUID, front: str) -> bool:
+    """Delete a bookmark by question text. Returns True if a row was removed."""
+    key = srs.card_key(front)
+    result = await db.execute(
+        Bookmark.__table__.delete().where(
+            Bookmark.user_id == user_id, Bookmark.card_key == key
         )
     )
     await db.commit()

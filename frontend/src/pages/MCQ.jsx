@@ -7,10 +7,12 @@ import Icon from '../components/ui/Icon'
 import Confetti from '../components/ui/Confetti'
 import GeneratingState from '../components/ui/GeneratingState'
 import ErrorState from '../components/ui/ErrorState'
+import BookmarkButton from '../components/ui/BookmarkButton'
 import { saveGeneration, loadGeneration, updateGeneration } from '../lib/genStorage'
 import { awardXP, recordLastGen, resultMessage } from '../lib/gamification'
 import { useGenerationWS } from '../hooks/useGenerationWS'
 import { recordMistake } from '../services/mistakes.service'
+import { addBookmark, removeBookmark } from '../services/bookmarks.service'
 import { recordAttempts } from '../services/analytics.service'
 import { askAboutQuestion } from '../lib/askTutor'
 
@@ -54,6 +56,7 @@ export default function MCQ() {
   const [hovered, setHovered] = useState(null) // { qi, letter }
   const [isRetake, setIsRetake] = useState(false) // retakes earn no XP
   const [xpEarned, setXpEarned] = useState(0)
+  const [bookmarked, setBookmarked] = useState({})
 
   const { connect, status: wsStatus, currentStageIndex, result: wsResult, error: wsError } = useGenerationWS('mcq')
   const loading = wsStatus === 'connecting' || wsStatus === 'running'
@@ -81,7 +84,17 @@ export default function MCQ() {
     setCurrentGenId(null)
     setIsRetake(false)
     setXpEarned(0)
+    setBookmarked({})
     setSearchParams({})
+  }
+
+  function toggleBookmark(qi) {
+    const q = questions[qi]
+    if (!q) return
+    const isOn = bookmarked[qi]
+    setBookmarked(b => ({ ...b, [qi]: !isOn }))
+    if (isOn) removeBookmark(q.question)
+    else addBookmark('mcq', config.subject, q)
   }
 
   // Handle WS result
@@ -93,6 +106,7 @@ export default function MCQ() {
     setCurrentGenId(gid)
     setIsRetake(false)
     setXpEarned(0)
+    setBookmarked({})
     saveGeneration(gid, { type: 'mcq', questions: qs, config, selected: {}, revealed: {} })
     setSearchParams({ gen: gid })
     awardXP('gen_mcq', { subject: config.subject })
@@ -179,6 +193,7 @@ export default function MCQ() {
     setCurrentGenId(null)
     setIsRetake(false)
     setXpEarned(0)
+    setBookmarked({})
   }
 
   function handleRetry() {
@@ -281,7 +296,10 @@ export default function MCQ() {
             <div key={qi} className="mcq-card anim">
               <div className="mcq-top">
                 <span className="mcq-topic">{q.topic ?? `Question ${qi + 1}`}</span>
-                <DifficultyTag difficulty={q.difficulty ?? config.difficulty} />
+                <div className="mcq-top-actions">
+                  <DifficultyTag difficulty={q.difficulty ?? config.difficulty} />
+                  <BookmarkButton active={Boolean(bookmarked[qi])} onToggle={() => toggleBookmark(qi)} />
+                </div>
               </div>
               <div className="mcq-body">
                 {q.passage && (

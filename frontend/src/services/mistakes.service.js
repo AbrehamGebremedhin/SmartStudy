@@ -3,7 +3,7 @@ import { api } from './apiClient'
 // Normalize either question shape into what the review deck renders.
 // MCQ generated: options are "A text" strings, letter = opt[0].
 // Exam: options are { letter, text, image_url } objects.
-function normalize(q) {
+export function normalize(q) {
   const options = (q.options ?? []).map(o =>
     typeof o === 'string'
       ? { letter: o[0], text: o.slice(3) }

@@ -5,8 +5,10 @@ import Icon from '../components/ui/Icon'
 import EmptyState from '../components/ui/EmptyState'
 import ErrorState from '../components/ui/ErrorState'
 import Confetti from '../components/ui/Confetti'
+import BookmarkButton from '../components/ui/BookmarkButton'
 import { awardXP, resultMessage } from '../lib/gamification'
 import { recordMistake } from '../services/mistakes.service'
+import { addBookmark, removeBookmark } from '../services/bookmarks.service'
 import { recordAttempts } from '../services/analytics.service'
 import { askAboutQuestion } from '../lib/askTutor'
 
@@ -32,6 +34,7 @@ export default function MockExam() {
   const [timeLeft, setTimeLeft] = useState(0)
   const [xpEarned, setXpEarned] = useState(0)
   const [filter, setFilter] = useState('all') // post-submit review filter: all | incorrect | unanswered
+  const [bookmarked, setBookmarked] = useState({})
   const submitRef = useRef(null)
 
   const spec = subjects.find(s => s.subject === config.subject)
@@ -50,7 +53,16 @@ export default function MockExam() {
 
   function reset() {
     setQuestions([]); setSelected({}); setStarted(false); setSubmitted(false)
-    setTimeLeft(0); setXpEarned(0); setError(null); setFilter('all')
+    setTimeLeft(0); setXpEarned(0); setError(null); setFilter('all'); setBookmarked({})
+  }
+
+  function toggleBookmark(qi) {
+    const q = questions[qi]
+    if (!q) return
+    const isOn = bookmarked[qi]
+    setBookmarked(b => ({ ...b, [qi]: !isOn }))
+    if (isOn) removeBookmark(q.question)
+    else addBookmark('exam', config.subject, q)
   }
 
   // Status of a question after submit; drives the review filter and ✓/✗ marks.
@@ -230,11 +242,14 @@ export default function MockExam() {
             <div key={q.id} id={`q${qi}`} className="mcq-card anim">
               <div className="mcq-top">
                 <span className="mcq-topic">{submitted ? (q.topic ?? `Question ${qi + 1}`) : `Question ${qi + 1}`}</span>
-                {submitted && (
-                  <span className={`q-mark ${userAnswer === correct ? 'ok' : 'no'}`}>
-                    {userAnswer === correct ? '✓' : '✗'}
-                  </span>
-                )}
+                <div className="mcq-top-actions">
+                  {submitted && (
+                    <span className={`q-mark ${userAnswer === correct ? 'ok' : 'no'}`}>
+                      {userAnswer === correct ? '✓' : '✗'}
+                    </span>
+                  )}
+                  <BookmarkButton active={Boolean(bookmarked[qi])} onToggle={() => toggleBookmark(qi)} />
+                </div>
               </div>
               <div className="mcq-body">
                 {q.passage && <div className="mcq-passage">{q.passage}</div>}

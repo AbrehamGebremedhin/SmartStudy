@@ -270,6 +270,29 @@ class Mistake(Base):
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class Bookmark(Base):
+    """A question the user starred to revisit later — independent of right/wrong.
+
+    Same shape as Mistake (card_key hash of question text, question snapshotted
+    as JSONB) but user-initiated and never auto-removed.
+    """
+
+    __tablename__ = "bookmarks"
+    __table_args__ = (
+        Index("ix_bookmarks_user_created", "user_id", "created_at"),
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), primary_key=True)
+    card_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+    source: Mapped[str] = mapped_column(String, nullable=False)   # mcq | exam
+    subject: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    topic: Mapped[str | None] = mapped_column(String, nullable=True)
+    question: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
     __table_args__ = (

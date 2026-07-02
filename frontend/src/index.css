@@ -10,6 +10,9 @@
   --ink-2: #5C4D3C;
   --ink-3: #998672;
   --ink-inv: #F6F0E4;
+  /* Always-dark decorative surface (sidebar, hero, login, celebration cards) —
+     fixed regardless of theme; paired with --ink-inv text. */
+  --ink-fixed: #1E1610;
 
   --ochre: #C4841D;
   --ochre-deep: #A06B10;
@@ -43,6 +46,28 @@
   --f-geez: 'Noto Sans Ethiopic', sans-serif;
 }
 
+/* Dark mode — neutral surfaces + text invert; accent colors (ochre/vermillion/
+   indigo/highland) and the fixed ink-surfaces (sidebar, hero, login, etc.) stay
+   put, they're already dark and already have enough contrast. */
+[data-theme="dark"] {
+  --parchment: #16120D;
+  --sandstone: #1E1810;
+  --clay: #2B2417;
+
+  --ink: #EDE3D2;
+  --ink-2: #B9A98D;
+  --ink-3: #7C6E58;
+
+  --card: #201A12;
+  --border: #362D1E;
+  --border-2: #453A26;
+
+  --sh-1: 0 1px 3px rgba(0,0,0,0.3);
+  --sh-2: 0 4px 16px rgba(0,0,0,0.4);
+  --sh-3: 0 12px 40px rgba(0,0,0,0.5);
+}
+
+html { background-color: var(--parchment); }
 body {
   font-family: var(--f-body);
   background-color: var(--parchment);
@@ -103,7 +128,7 @@ body {
 /* ── Desktop Sidebar ── */
 .d-side {
   width: 270px;
-  background: var(--ink);
+  background: var(--ink-fixed);
   color: var(--ink-inv);
   flex-direction: column;
   position: fixed;
@@ -258,7 +283,7 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 12px 18px;
-  background: var(--ink);
+  background: var(--ink-fixed);
   color: var(--ink-inv);
   position: sticky;
   top: 0;
@@ -374,7 +399,7 @@ body {
 
 /* ── Hero ── */
 .hero {
-  background: var(--ink);
+  background: var(--ink-fixed);
   border-radius: var(--r-xl);
   padding: 28px 22px;
   margin-bottom: 24px;
@@ -716,6 +741,17 @@ select:focus, input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px rg
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
+.mcq-top-actions { display: flex; align-items: center; gap: 10px; }
+.bmk-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px;
+  background: none; border: none; border-radius: 50%; cursor: pointer;
+  color: var(--ink-3);
+  transition: color 0.15s, background-color 0.15s;
+}
+.bmk-btn:hover { background: rgba(196,132,29,0.1); color: var(--ochre); }
+.bmk-btn.on { color: var(--ochre); }
+.bmk-btn.on .ico { fill: var(--ochre); }
 .mcq-body { padding: 18px; }
 .mcq-q { font-size: 15px; line-height: 1.65; margin-bottom: 16px; font-weight: 500; }
 /* Past-exam question/choice images */
@@ -851,7 +887,7 @@ select:focus, input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px rg
   text-align: center;
 }
 .fc-front {
-  background: linear-gradient(150deg, var(--ink) 0%, #2A231D 100%);
+  background: linear-gradient(150deg, var(--ink-fixed) 0%, #2A231D 100%);
   color: var(--ink-inv);
   border: 1px solid rgba(196,132,29,0.12);
 }
@@ -1041,7 +1077,7 @@ select:focus, input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px rg
   overflow: hidden;
 }
 .c-msg.user .c-av { background: linear-gradient(135deg, var(--ochre), var(--vermillion)); color: white; }
-.c-msg.assistant .c-av { background: var(--ink); color: var(--ochre-glow); font-size: 11px; }
+.c-msg.assistant .c-av { background: var(--ink-fixed); color: var(--ochre-glow); font-size: 11px; }
 .c-av img { width: 100%; height: 100%; object-fit: cover; }
 .c-bub {
   padding: 12px 16px;
@@ -1051,7 +1087,7 @@ select:focus, input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px rg
   white-space: pre-wrap;
   max-width: min(85%, 520px);
 }
-.c-msg.user .c-bub { background: var(--ink); color: var(--ink-inv); border-bottom-right-radius: 4px; }
+.c-msg.user .c-bub { background: var(--ink-fixed); color: var(--ink-inv); border-bottom-right-radius: 4px; }
 .c-msg.assistant .c-bub { background: var(--card); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
 .chat-bar {
   padding: 12px 18px 18px;
@@ -1329,7 +1365,7 @@ select:focus, input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px rg
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--ink);
+  background: var(--ink-fixed);
   padding: 24px;
 }
 .crash-card { text-align: center; max-width: 400px; display: flex; flex-direction: column; align-items: center; }
@@ -1362,7 +1398,7 @@ select:focus, input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px rg
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--ink);
+  background: var(--ink-fixed);
   position: relative;
   overflow: hidden;
 }
@@ -1457,7 +1493,7 @@ select:focus, input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px rg
   left: 0; right: 0;
   top: calc(100% + 4px);
   z-index: 20;
-  background: var(--ink);
+  background: var(--ink-fixed);
   color: var(--ink-inv);
   font-size: 12px;
   line-height: 1.55;
@@ -1473,7 +1509,7 @@ select:focus, input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px rg
   width: 0; height: 0;
   border-left: 5px solid transparent;
   border-right: 5px solid transparent;
-  border-bottom: 5px solid var(--ink);
+  border-bottom: 5px solid var(--ink-fixed);
 }
 
 /* ── MCQ results table ── */
@@ -1485,7 +1521,7 @@ select:focus, input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px rg
   margin-top: 8px;
 }
 .results-header {
-  background: var(--ink);
+  background: var(--ink-fixed);
   padding: 28px 28px 24px;
   text-align: center;
   position: relative;
@@ -1777,7 +1813,7 @@ select:focus, input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px rg
 
 /* ── Notes: cover card ── */
 .n-cover {
-  background: var(--ink);
+  background: var(--ink-fixed);
   border-radius: var(--r-xl);
   padding: 32px 28px;
   margin-bottom: 16px;
@@ -1942,7 +1978,7 @@ select:focus, input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px rg
   align-self: flex-end;
   display: inline-block;
   max-width: 85%;
-  background: var(--ink);
+  background: var(--ink-fixed);
   color: var(--parchment);
   border-radius: 16px 16px 4px 16px;
   padding: 10px 14px;
@@ -2160,7 +2196,7 @@ select:focus, input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px rg
   display: flex;
   align-items: center;
   gap: 9px;
-  background: var(--ink);
+  background: var(--ink-fixed);
   color: var(--ochre-glow);
   border: 1px solid rgba(196,132,29,0.35);
   border-radius: 30px;
@@ -2196,7 +2232,7 @@ select:focus, input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px rg
 /* ── Level-up takeover ── */
 .lvlup-card {
   position: relative;
-  background: var(--ink);
+  background: var(--ink-fixed);
   border-radius: var(--r-xl);
   padding: 46px 32px 36px;
   width: 100%;
@@ -2574,7 +2610,7 @@ select:focus, input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px rg
   margin: 0 auto;
 }
 .fc-done-head {
-  background: var(--ink);
+  background: var(--ink-fixed);
   padding: 30px 28px 26px;
   text-align: center;
   position: relative;
