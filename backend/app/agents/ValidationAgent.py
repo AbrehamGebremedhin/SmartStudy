@@ -6,12 +6,13 @@ from langchain_deepseek import ChatDeepSeek
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 import json
-import tiktoken
 
 from models import TokenCount
-from prompts import (_CHAT_SCOPE_HUMAN, _CHAT_SCOPE_SYSTEM, _COVERAGE_HUMAN, _COVERAGE_SYSTEM,
+from prompts import (_CHAT_SCOPE_HUMAN, _CHAT_SCOPE_SYSTEM, _CHATRESP_VALIDATE_HUMAN,
+                     _CHATRESP_VALIDATE_SYSTEM, _COVERAGE_HUMAN, _COVERAGE_SYSTEM,
                      _FLASHCARD_VALIDATE_HUMAN, _FLASHCARD_VALIDATE_SYSTEM, _MCQ_VALIDATE_HUMAN,
                      _MCQ_VALIDATE_SYSTEM, _NOTES_VALIDATE_HUMAN, _NOTES_VALIDATE_SYSTEM)
+from utils import TokenAccountant
 from utils import format_docs as _format_docs
 
 
@@ -27,24 +28,14 @@ class ValidationAgent:
         # creative generation — deterministic output is strictly better here.
         self.llm = ChatDeepSeek(model="deepseek-v4-flash", api_key=api_key, temperature=0)
         self._json_llm = self.llm.bind(response_format={"type": "json_object"})
-        # NOTE: tiktoken's gpt-3.5-turbo encoding is an APPROXIMATION for DeepSeek, which
-        # uses a different tokenizer. Token counts and cost estimates are indicative only.
-        self.token_counter = tiktoken.encoding_for_model("gpt-3.5-turbo")
-        self.COST_PER_1M_INPUT = 0.14   # DeepSeek-V4-Flash
-        self.COST_PER_1M_OUTPUT = 0.28  # DeepSeek-V4-Flash
+        self._tokens = TokenAccountant()
 
     def count_tokens(self, text: str) -> int:
-        return len(self.token_counter.encode(str(text)))
+        return self._tokens.count(text)
 
     def record_token_usage(self, input_text: str, output_text: str) -> TokenCount:
         """Return per-call token usage; does not accumulate across requests."""
-        input_tokens = self.count_tokens(input_text)
-        output_tokens = self.count_tokens(output_text)
-        cost = (
-            (input_tokens * self.COST_PER_1M_INPUT / 1_000_000) +
-            (output_tokens * self.COST_PER_1M_OUTPUT / 1_000_000)
-        )
-        return TokenCount(input_tokens, output_tokens, cost)
+        return self._tokens.record(input_text, output_text)
 
     async def _run_chain(self, prompt: "PromptTemplate | ChatPromptTemplate", inputs: dict) -> str:
         if "context" in inputs:
@@ -188,6 +179,65 @@ class ValidationAgent:
             "needs_replacement": len(invalid_indices) > 0,
             "token_usage": str(token_usage),
         }
+
+    async def validate_chat_response(self, response: Dict, context, keypoints: List[str]) -> Dict[str, Any]:
+        _zero = TokenCount(0, 0, 0.0)
+        if isinstance(response, dict):
+            if "error" in response:
+                return {
+                    "is_valid": False,
+                    "reason": response["error"],
+                    "needs_regeneration": True,
+                    "token_usage": str(_zero)
+                }
+            if "response" in response:
+                if isinstance(response["response"], dict):
+                    response_text = response["response"].get("response", "")
+                else:
+                    response_text = str(response["response"])
+            else:
+                response_text = str(response)
+        else:
+            response_text = str(response)
+
+        if not response_text.strip():
+            return {
+                "is_valid": False,
+                "reason": "Empty response",
+                "needs_regeneration": True,
+                "token_usage": str(_zero)
+            }
+
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", _CHATRESP_VALIDATE_SYSTEM),
+            ("human", _CHATRESP_VALIDATE_HUMAN),
+        ])
+
+        try:
+            validation_response = await self._run_chain(prompt, {
+                "context": context,
+                "keypoints": keypoints,
+                "response": response_text,
+            })
+            validation = json.loads(str(validation_response))
+            token_usage = self.record_token_usage(
+                f"{_format_docs(context)}\n{response_text}\n{str(keypoints)}",
+                str(validation)
+            )
+            is_valid = validation.get("is_valid", True)
+            return {
+                "is_valid": is_valid,
+                "reason": validation.get("reason", ""),
+                "needs_regeneration": not is_valid,
+                "token_usage": str(token_usage)
+            }
+        except Exception:
+            return {
+                "is_valid": True,
+                "reason": "Validation parsing failed - assuming valid",
+                "needs_regeneration": False,
+                "token_usage": str(_zero)
+            }
 
     async def check_chat_scope(self, answer: str, subject: str) -> Dict[str, Any]:
         """

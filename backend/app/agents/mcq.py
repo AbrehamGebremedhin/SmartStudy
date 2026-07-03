@@ -158,6 +158,7 @@ class MCQMixin:
             # One sequential call on the full context, with the same filters.
             shortfall = num_questions - len(valid_questions)
             if shortfall > 0:
+                _t0 = time.perf_counter()
                 topup_response = await chain.ainvoke({**base_args, "num_questions": shortfall + 2,
                                                       "context": format_docs(docs[:12])})
                 topup_parsed = parse_llm_response(str(topup_response), self.logger)
@@ -166,6 +167,7 @@ class MCQMixin:
                     if not is_test_prep_artifact(subject, q.get("topic"), q.get("question"), q.get("passage"))
                 ]
                 valid_questions = valid_questions + topup_questions
+                self.logger.info("[mcq] top-up (shortfall=%d): %.2fs", shortfall, time.perf_counter() - _t0)
 
             valid_questions = redistribute_answer_positions(valid_questions)
 

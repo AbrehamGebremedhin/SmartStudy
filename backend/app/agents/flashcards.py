@@ -14,10 +14,11 @@ from models import TokenCount
 from prompts import _FLASHCARD_HUMAN, _FLASHCARD_SYSTEM
 from subject_rules import (get_grounding_rule, get_subject_focus, get_subject_rules,
                            presentation_rules)
-from utils import format_docs, parse_llm_response
+from utils import format_docs, parse_llm_response, retry_on_none
 
 
 class FlashcardMixin:
+    @retry_on_none(max_retries=3)
     async def generate_flashcards(self, subject: str, num_cards: int = 5,
                                   topic: Optional[str] = None, grade: Optional[int] = None,
                                   unit: Optional[str] = None, difficulty: str = "medium",
@@ -147,6 +148,7 @@ class FlashcardMixin:
             # Top-up: filters may have dropped cards below the requested count.
             shortfall = num_cards - len(valid_cards)
             if shortfall > 0:
+                _t0 = time.perf_counter()
                 topup_response = await chain.ainvoke({**base_args, "num_cards": shortfall + 2,
                                                       "context": format_docs(docs[:12])})
                 topup_parsed = parse_llm_response(str(topup_response), self.logger)
@@ -155,6 +157,7 @@ class FlashcardMixin:
                     if not is_test_prep_artifact(subject, c.get("front"), c.get("back"), c.get("topic"))
                 ]
                 valid_cards = valid_cards + topup_cards
+                self.logger.info("[flashcard] top-up (shortfall=%d): %.2fs", shortfall, time.perf_counter() - _t0)
 
             def _normalise(text: str) -> frozenset:
                 return frozenset(re.sub(r"[^\w]", " ", text.lower()).split())

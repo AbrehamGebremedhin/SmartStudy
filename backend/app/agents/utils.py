@@ -5,7 +5,34 @@ import logging
 import time
 from typing import Any, Dict
 
+import tiktoken
 from langchain_core.documents import Document
+
+from models import TokenCount
+
+
+class TokenAccountant:
+    """Shared token/cost accounting for DeepSeek-V4-Flash calls — was duplicated
+    verbatim across GenerationBase and ValidationAgent.
+
+    NOTE: tiktoken's gpt-3.5-turbo encoding is an APPROXIMATION for DeepSeek, which
+    uses a different tokenizer. Token counts and cost estimates are indicative only.
+    """
+    COST_PER_1M_INPUT = 0.14   # DeepSeek-V4-Flash
+    COST_PER_1M_OUTPUT = 0.28  # DeepSeek-V4-Flash
+
+    def __init__(self):
+        self._encoder = tiktoken.encoding_for_model("gpt-3.5-turbo")
+
+    def count(self, text: Any) -> int:
+        return len(self._encoder.encode(str(text)))
+
+    def record(self, input_text: Any, output_text: Any) -> TokenCount:
+        """Return per-call token usage; does not accumulate across requests."""
+        inp = self.count(input_text)
+        out = self.count(output_text)
+        cost = (inp * self.COST_PER_1M_INPUT + out * self.COST_PER_1M_OUTPUT) / 1_000_000
+        return TokenCount(inp, out, cost)
 
 
 def format_docs(context) -> str:

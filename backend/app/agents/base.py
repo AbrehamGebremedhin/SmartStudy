@@ -6,7 +6,6 @@ import logging
 import os
 from typing import Optional
 
-import tiktoken
 from dotenv import load_dotenv
 from langchain_deepseek import ChatDeepSeek
 
@@ -14,6 +13,7 @@ from ContextRefinementAgent import ContextRefinementAgent
 from ValidationAgent import ValidationAgent
 from models import ChatSession, TokenCount
 from session_manager import SessionManager
+from utils import TokenAccountant
 
 load_dotenv("./.env")
 
@@ -38,20 +38,13 @@ class GenerationBase:
         self.context_agent = ContextRefinementAgent()
         self.validation_agent = ValidationAgent()
         self.sessions = SessionManager()
-        # NOTE: tiktoken's gpt-3.5-turbo encoding is an approximation for DeepSeek.
-        # Token counts and cost estimates are indicative only.
-        self._token_encoder = tiktoken.encoding_for_model("gpt-3.5-turbo")
-        self.COST_PER_1M_INPUT = 0.14   # DeepSeek-V4-Flash
-        self.COST_PER_1M_OUTPUT = 0.28  # DeepSeek-V4-Flash
+        self._tokens = TokenAccountant()
 
     def _count_tokens(self, text: str) -> int:
-        return len(self._token_encoder.encode(str(text)))
+        return self._tokens.count(text)
 
     def _record_token_usage(self, input_text: str, output_text: str) -> TokenCount:
-        inp = self._count_tokens(input_text)
-        out = self._count_tokens(output_text)
-        cost = (inp * self.COST_PER_1M_INPUT + out * self.COST_PER_1M_OUTPUT) / 1_000_000
-        return TokenCount(inp, out, cost)
+        return self._tokens.record(input_text, output_text)
 
     def create_chat_session(self, subject: str, initial_title: str = "New Chat",
                             grade: Optional[int] = None) -> str:

@@ -757,6 +757,21 @@ Return JSON only:
     "available_topics": ["up to 5 most relevant topics mentioned in the excerpts"]
 }}"""
 
+_CHATRESP_VALIDATE_SYSTEM = """You are evaluating an educational response for Grade 9-12
+Ethiopian EUEE students against these criteria:
+1. Addresses the given key points
+2. Accurate per the provided context
+3. Clear and well-structured
+4. Contains substantive information
+5. Uses appropriate tone and language level
+
+Return JSON: {{"is_valid": boolean, "reason": "explanation if invalid"}}"""
+
+_CHATRESP_VALIDATE_HUMAN = """Key points: {keypoints}
+
+Context: {context}
+Response: {response}"""
+
 _COVERAGE_HUMAN = """A student requested study notes on: "{topic}"
 
 Below are curriculum excerpts from {subject}{grade_unit}.
