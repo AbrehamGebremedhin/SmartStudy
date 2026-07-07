@@ -160,6 +160,7 @@ export default function MCQ() {
         unit: isSAT ? null : String(config.unit),
         topic: questions[qi].topic ?? null,
         correct: isCorrect,
+        source: 'mcq',
       }])
     }
 

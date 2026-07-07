@@ -147,7 +147,7 @@ export default function Notes() {
             </button>
           </div>
 
-          <NotesContent notes={notes} subject={config.subject} />
+          <NotesContent notes={notes} config={config} />
 
           {chatHistory.length > 0 && (
             <div className="n-chat-thread-flow">
@@ -300,7 +300,8 @@ function Chips({ items }) {
 
 // ─── Main renderer ───────────────────────────────────────────────────────────
 
-function NotesContent({ notes, subject }) {
+function NotesContent({ notes, config }) {
+  const subject = config.subject
   const overview      = notes.overview ?? null
   const objectives    = notes.learning_objectives ?? []
   const keyConcepts   = notes.key_concepts ?? []
@@ -595,7 +596,7 @@ function NotesContent({ notes, subject }) {
         <div className="n-sec">
           <SecTitle>Review Questions</SecTitle>
           {reviewQs.map((q, i) => (
-            <ReviewQuestion key={i} index={i} question={q} subject={subject} note={notes} />
+            <ReviewQuestion key={i} index={i} question={q} config={config} note={notes} />
           ))}
         </div>
       )}
@@ -644,7 +645,8 @@ function PracticeProblem({ index, problem }) {
   )
 }
 
-function ReviewQuestion({ index, question, subject, note }) {
+function ReviewQuestion({ index, question, config, note }) {
+  const subject = config.subject
   const [draft, setDraft] = useState('')
   const [evaluating, setEvaluating] = useState(false)
   const [result, setResult] = useState(null)
@@ -660,11 +662,17 @@ function ReviewQuestion({ index, question, subject, note }) {
     setResult(null)
     setEvalError(null)
     try {
+      const isSAT = subject === 'sat'
       const res = await evaluateAnswer({
         subject: subject ?? 'general',
         question: typeof question === 'string' ? { question: text } : question,
         student_answer: draft.trim(),
         note: note ?? null,
+        // Tags for the attempt row the backend logs — same placement the note
+        // was generated for (grade/unit don't apply to SAT).
+        grade: isSAT ? null : config.grade ?? null,
+        unit: isSAT ? null : (config.unit != null ? String(config.unit) : null),
+        topic: config.topic?.trim() || null,
       })
       setResult(res)
       awardXP('eval_submitted', { score: res.score, subject })

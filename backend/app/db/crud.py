@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import Integer, cast, func, select, update
+from sqlalchemy import Integer, cast, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -409,13 +409,18 @@ async def get_due_flashcards(
 # ---------------------------------------------------------------------------
 
 async def record_attempts(db: AsyncSession, user_id: uuid.UUID, attempts: list[dict]) -> None:
-    """Append a batch of answered questions. Each dict: subject, grade, unit, topic, correct."""
+    """Append a batch of answered questions.
+
+    Each dict: subject, grade, unit, topic, correct (+ optional source,
+    question_id, score — see QuestionAttempt for their semantics).
+    """
     if not attempts:
         return
     db.add_all([
         QuestionAttempt(
             user_id=user_id, subject=a["subject"], grade=a.get("grade"),
             unit=a.get("unit"), topic=a.get("topic"), correct=a["correct"],
+            source=a.get("source"), question_id=a.get("question_id"), score=a.get("score"),
         )
         for a in attempts
     ])
@@ -426,26 +431,94 @@ async def get_mastery(
     db: AsyncSession,
     user_id: uuid.UUID,
     subject: str | None = None,
+    by_source: bool = False,
 ) -> list[dict]:
-    """Per-(subject, grade, unit) accuracy, weakest first. Grade/unit may be null."""
-    conds = [QuestionAttempt.user_id == user_id]
+    """Per-(subject, grade, unit) accuracy, weakest first. Grade/unit may be null.
+
+    Review attempts (recall minutes after reading the notes — inflated) and drill
+    attempts (retakes) are excluded so "weak areas" stays honest; they appear in
+    trends only. With by_source the rows split per source (NULL = legacy), which
+    makes practice-vs-mock accuracy comparable per unit client-side.
+    """
+    conds = [
+        QuestionAttempt.user_id == user_id,
+        # NOT IN is NULL-hostile in SQL; keep the legacy-NULL rows explicitly.
+        or_(QuestionAttempt.source.is_(None), QuestionAttempt.source.notin_(("review", "drill"))),
+    ]
+    if subject:
+        conds.append(QuestionAttempt.subject == subject)
+    total = func.count()
+    correct = func.sum(cast(QuestionAttempt.correct, Integer))
+    group = [QuestionAttempt.subject, QuestionAttempt.grade, QuestionAttempt.unit]
+    if by_source:
+        group.append(QuestionAttempt.source)
+    result = await db.execute(
+        select(*group, total.label("total"), correct.label("correct"))
+        .where(*conds)
+        .group_by(*group)
+    )
+    rows = []
+    for row in result.all():
+        s, g, u, *rest = row
+        src = rest[0] if by_source else None
+        t, c = rest[-2], rest[-1]
+        rows.append({"subject": s, "grade": g, "unit": u, "source": src,
+                     "total": t, "correct": int(c or 0),
+                     "accuracy": round((int(c or 0) / t) * 100) if t else 0})
+    rows.sort(key=lambda r: r["accuracy"])  # weakest first
+    return rows
+
+
+async def get_trends(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    days: int = 30,
+    subject: str | None = None,
+) -> list[dict]:
+    """Per-(day, source) attempt counts for the trend chart, oldest first.
+
+    Days are bucketed in Africa/Addis_Ababa (UTC+3), not UTC — evening study
+    sessions are most sessions, and UTC boundaries would split them across the
+    wrong day. Source NULL (legacy rows) comes through as its own bucket rather
+    than being dropped, so existing users' history isn't understated.
+    """
+    local_day = func.date_trunc("day", func.timezone("Africa/Addis_Ababa", QuestionAttempt.created_at))
+    conds = [
+        QuestionAttempt.user_id == user_id,
+        QuestionAttempt.created_at >= datetime.now(timezone.utc) - timedelta(days=days),
+    ]
     if subject:
         conds.append(QuestionAttempt.subject == subject)
     total = func.count()
     correct = func.sum(cast(QuestionAttempt.correct, Integer))
     result = await db.execute(
-        select(QuestionAttempt.subject, QuestionAttempt.grade, QuestionAttempt.unit,
+        select(local_day.label("day"), QuestionAttempt.source,
                total.label("total"), correct.label("correct"))
         .where(*conds)
-        .group_by(QuestionAttempt.subject, QuestionAttempt.grade, QuestionAttempt.unit)
+        .group_by(local_day, QuestionAttempt.source)
+        .order_by(local_day)
     )
-    rows = [
-        {"subject": s, "grade": g, "unit": u, "total": t, "correct": int(c or 0),
-         "accuracy": round((int(c or 0) / t) * 100) if t else 0}
-        for s, g, u, t, c in result.all()
+    return [
+        {"date": d.strftime("%Y-%m-%d"), "source": src, "total": t, "correct": int(c or 0)}
+        for d, src, t, c in result.all()
     ]
-    rows.sort(key=lambda r: r["accuracy"])  # weakest first
-    return rows
+
+
+async def get_retention(db: AsyncSession, user_id: uuid.UUID) -> list[dict]:
+    """Per-subject Leitner-box strength from flashcard reviews.
+
+    `strong` = cards in box 3+ (review interval ≥ 4 days) — a retention signal
+    that complements accuracy: mastery measures the moment, this measures what
+    has survived spaced repetition.
+    """
+    total = func.count()
+    strong = func.sum(cast(FlashcardReview.box >= 3, Integer))
+    result = await db.execute(
+        select(FlashcardReview.subject, total.label("total"), strong.label("strong"))
+        .where(FlashcardReview.user_id == user_id)
+        .group_by(FlashcardReview.subject)
+    )
+    return [{"subject": s or "general", "total": t, "strong": int(st or 0)} for s, t, st in result.all()]
 
 
 # ---------------------------------------------------------------------------

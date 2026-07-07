@@ -241,6 +241,18 @@ class QuestionAttempt(Base):
     unit: Mapped[str | None] = mapped_column(String, nullable=True)
     topic: Mapped[str | None] = mapped_column(String, nullable=True)
     correct: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    # Which flow produced the attempt: mcq | exam | review | drill. NULL = legacy
+    # rows from before the column existed (an mcq/exam mix). `review` and `drill`
+    # are excluded from mastery: review is recall-under-priming (inflated), drill
+    # is a retake by definition. Both still feed the trends chart.
+    source: Mapped[str | None] = mapped_column(String, nullable=True)
+    # exam_questions.id when the question has one (exam/drill-on-exam attempts);
+    # generated MCQs have no id. Lets a wrong-looking struggle flag be audited
+    # against the question's enrichment tags, and re-tagged if taxonomy is fixed.
+    question_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # 0–1 partial credit from AI evaluation (review attempts only); correct is
+    # the boolean the graphs use, this preserves the grader's full signal.
+    score: Mapped[float | None] = mapped_column(Numeric(3, 2), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

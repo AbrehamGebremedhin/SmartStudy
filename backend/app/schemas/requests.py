@@ -110,8 +110,18 @@ class EvaluateAnswerRequest(BaseModel):
     question: dict
     student_answer: str = Field(min_length=1, max_length=5000)
     note: dict | str | None = None
+    # Curriculum placement of the note the question came from — only used to tag
+    # the server-side attempt row for analytics, not fed to the evaluator.
+    grade: ValidGrade | None = None
+    unit: str | None = Field(default=None, min_length=1, max_length=50)
+    topic: str | None = Field(default=None, min_length=1, max_length=200)
 
     @field_validator("student_answer", mode="before")
     @classmethod
     def sanitize_answer(cls, v: str) -> str:
         return _clean(v)
+
+    @field_validator("unit", "topic", mode="before")
+    @classmethod
+    def sanitize_text_fields(cls, v: str | None) -> str | None:
+        return _clean(v) if v is not None else v

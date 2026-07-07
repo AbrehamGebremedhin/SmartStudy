@@ -6,6 +6,18 @@ export function recordAttempts(attempts) {
   api.post('/analytics/attempts', { attempts }).catch(() => {})
 }
 
-export function getMastery(subject) {
-  return api.get(`/analytics/mastery${subject ? `?subject=${encodeURIComponent(subject)}` : ''}`)
+export function getMastery(subject, { bySource = false } = {}) {
+  const params = new URLSearchParams()
+  if (subject) params.set('subject', subject)
+  if (bySource) params.set('by_source', 'true')
+  const qs = params.toString()
+  return api.get(`/analytics/mastery${qs ? `?${qs}` : ''}`)
+}
+
+export function getTrends(days = 30, subject) {
+  return api.get(`/analytics/trends?days=${days}${subject ? `&subject=${encodeURIComponent(subject)}` : ''}`)
+}
+
+export function getRetention() {
+  return api.get('/analytics/retention')
 }

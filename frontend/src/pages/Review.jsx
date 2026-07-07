@@ -7,6 +7,7 @@ import LoadingState from '../components/ui/LoadingState'
 import BookmarkButton from '../components/ui/BookmarkButton'
 import { awardXP } from '../lib/gamification'
 import { getMistakes, resolveMistake } from '../services/mistakes.service'
+import { recordAttempts } from '../services/analytics.service'
 import { getBookmarks, removeBookmark } from '../services/bookmarks.service'
 import { askAboutQuestion } from '../lib/askTutor'
 
@@ -65,6 +66,19 @@ function MistakesTab() {
     const q = cards[i]
     const correct = letter === q.correct_answer
     setState(s => ({ ...s, [i]: { selected: letter, revealed: true, resolved: correct } }))
+    // Drill attempts feed the trends chart (mistakes turning into corrects) but
+    // are excluded from mastery server-side — they're retakes by definition.
+    if (q.__subject) {
+      recordAttempts([{
+        subject: q.__subject,
+        grade: q.grade ?? null,
+        unit: q.unit != null ? String(q.unit) : null,
+        topic: q.topic ?? null,
+        correct,
+        source: 'drill',
+        question_id: q.id ?? null,
+      }])
+    }
     if (correct) {
       awardXP('mcq_correct', { subject: null })
       resolveMistake(q.question).catch(() => {})

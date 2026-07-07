@@ -1,13 +1,18 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.db import crud
 from app.db.database import get_db
 from app.db.models import User
 from app.schemas.requests import EvaluateAnswerRequest
 from app.schemas.responses import EvaluateAnswerResponse
 from app.security.rate_limiter import limiter
 from app.services.generation import run_evaluate_answer
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/evaluate", tags=["Evaluation"])
 
@@ -30,6 +35,18 @@ async def evaluate_answer(
 
     if result.get("error"):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=result["error"])
+
+    # Persist the attempt where the grade is produced — client-side logging would
+    # lose writes on page leave and let clients assert correct:true unverified.
+    # Best-effort: analytics must never break the evaluation response.
+    try:
+        await crud.record_attempts(db, current_user.id, [{
+            "subject": body.subject, "grade": body.grade, "unit": body.unit,
+            "topic": body.topic, "correct": result.get("is_correct", False),
+            "source": "review", "score": result.get("score"),
+        }])
+    except Exception:
+        logger.exception("failed to record review attempt")
 
     return EvaluateAnswerResponse(
         is_correct=result.get("is_correct", False),

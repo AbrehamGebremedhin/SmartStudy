@@ -110,7 +110,8 @@ export default function MockExam() {
       gained += awardXP(right ? 'mcq_correct' : 'mcq_incorrect', { subject: config.subject }).gained
       if (!right) recordMistake('exam', config.subject, q)  // wrong or blank → drill it
       attempts.push({ subject: config.subject, grade: q.grade ?? null,
-                      unit: q.unit != null ? String(q.unit) : null, topic: q.topic ?? null, correct: right })
+                      unit: q.unit != null ? String(q.unit) : null, topic: q.topic ?? null, correct: right,
+                      source: 'exam', question_id: q.id ?? null })
     })
     recordAttempts(attempts)
     gained += awardXP('quiz_complete', { correct, total: questions.length, subject: config.subject }).gained

@@ -9,6 +9,7 @@ import Icon from '../components/ui/Icon'
 import EmptyState from '../components/ui/EmptyState'
 import ErrorState from '../components/ui/ErrorState'
 import ActivityHeatmap from '../components/ui/ActivityHeatmap'
+import ProgressCharts from '../components/ui/ProgressCharts'
 import CountUp from '../components/ui/CountUp'
 
 const FILTERS = [
@@ -139,6 +140,8 @@ export default function History() {
             ))}
           </div>
         )}
+
+        <ProgressCharts />
 
         {mastery.filter(m => m.total >= 3 && m.accuracy < 100).length > 0 && (
           <div className="weak-areas anim">

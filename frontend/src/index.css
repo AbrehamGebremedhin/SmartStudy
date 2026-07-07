@@ -23,6 +23,9 @@
   --indigo-l: #CEDAE8;
   --highland: #2D6A4F;
   --highland-l: #D4EDDA;
+  /* Chart-only step of indigo: --indigo itself fails chart contrast/chroma checks
+     on both surfaces (validated); marks only, never text. */
+  --indigo-bright: #4E76B4;
 
   --card: #FFFDF8;
   --border: #DED4C2;
@@ -2958,3 +2961,123 @@ select:focus, input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px rg
 }
 .heat-legend span:first-child { margin-right: 2px; }
 .heat-legend span:last-child { margin-left: 2px; }
+
+/* ── Progress analytics charts (ProgressCharts.jsx) ── */
+.an-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-l);
+  padding: 16px;
+  box-shadow: var(--sh-1);
+  margin-bottom: 14px;
+}
+.an-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.an-title {
+  font-family: var(--f-display);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.an-sub { font-size: 11px; color: var(--ink-3); font-family: var(--f-mono); }
+.an-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.an-empty { font-size: 13px; color: var(--ink-3); padding: 24px 0; text-align: center; }
+
+.an-wrap { position: relative; }
+.an-svg { width: 100%; height: auto; display: block; touch-action: none; }
+.an-grid { stroke: var(--border); stroke-width: 1; }
+.an-tick { fill: var(--ink-3); font-size: 10px; font-family: var(--f-mono); }
+.an-line { fill: none; stroke: var(--ochre); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.an-area { fill: var(--ochre); opacity: 0.1; }
+.an-dot { fill: var(--ochre); stroke: var(--card); stroke-width: 2; }
+.an-cross { stroke: var(--border-2); stroke-width: 1; }
+.an-endlabel { fill: var(--ink); font-size: 12px; font-weight: 700; }
+.an-tip {
+  position: absolute;
+  top: 0;
+  /* keep the bubble on the card even when the crosshair hugs an edge */
+  left: clamp(70px, var(--tx, 50%), calc(100% - 70px));
+  transform: translateX(-50%) translateY(-4px);
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  background: var(--ink-fixed);
+  color: var(--ink-inv);
+  border-radius: var(--r-s);
+  padding: 5px 9px;
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: var(--sh-2);
+}
+.an-tip-v { font-weight: 700; font-size: 13px; }
+
+.an-legend { display: flex; gap: 16px; font-size: 11px; color: var(--ink-2); margin-bottom: 12px; }
+.an-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.an-swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.an-c1.an-swatch, .an-fill.an-c1 { background: var(--ochre); }
+.an-c2.an-swatch, .an-fill.an-c2 { background: var(--indigo-bright); }
+
+.an-pv-row { margin-bottom: 14px; }
+.an-pv-row:last-child { margin-bottom: 2px; }
+.an-pv-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-2);
+  margin-bottom: 5px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.an-gap {
+  font-size: 10px;
+  font-weight: 700;
+  font-family: var(--f-mono);
+  color: var(--vermillion);
+  background: var(--vermillion-l);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+[data-theme="dark"] .an-gap { background: transparent; outline: 1px solid var(--vermillion); }
+.an-pv-line { display: flex; align-items: center; gap: 10px; margin-bottom: 3px; }
+.an-bar {
+  flex: 1;
+  height: 10px;
+  background: var(--sandstone);
+  border-radius: 0 4px 4px 0;
+}
+.an-fill {
+  height: 100%;
+  width: var(--w, 0%);
+  border-radius: 0 4px 4px 0; /* rounded data-end, square at the baseline */
+}
+.an-pv-pct {
+  font-family: var(--f-mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink-3);
+  width: 36px;
+  text-align: right;
+}
+.an-ret-row { margin-bottom: 8px; }
+.an-ret-fill { background: var(--highland); }
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
