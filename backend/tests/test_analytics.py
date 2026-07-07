@@ -1,9 +1,12 @@
 """Attempt logging + per-unit mastery aggregation."""
 import uuid
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from sqlalchemy import select
 
 from app.db import crud
+from app.db.models import QuestionAttempt
 
 
 @pytest.mark.asyncio
@@ -82,3 +85,30 @@ async def test_source_semantics(client, db_session, test_user):
 
     # Retention: no flashcard reviews yet.
     assert (await client.get("/api/analytics/retention")).json() == []
+
+
+@pytest.mark.asyncio
+async def test_evaluate_logs_review_attempt(client, db_session, test_user):
+    """The evaluate route persists the attempt server-side: source=review, the
+    grader's score kept, visible in trends but never in mastery."""
+    graded = {"is_correct": True, "score": 0.85, "feedback": "Good answer."}
+    with patch("app.api.routes.evaluation.run_evaluate_answer", new=AsyncMock(return_value=graded)):
+        res = await client.post("/api/evaluate", json={
+            "subject": "biology", "question": {"question": "What is a cell?"},
+            "student_answer": "The basic structural unit of life.",
+            "grade": 12, "unit": "1", "topic": "Cells",
+        })
+    assert res.status_code == 200
+
+    # Table persists across tests in the session DB — scope to this test's user.
+    row = (await db_session.execute(
+        select(QuestionAttempt).where(QuestionAttempt.user_id == test_user.id)
+    )).scalars().one()
+    assert row.source == "review" and row.correct is True and float(row.score) == 0.85
+    assert row.subject == "biology" and row.grade == 12 and row.unit == "1"
+
+    # Recall-under-priming never reaches mastery…
+    assert (await client.get("/api/analytics/mastery?subject=biology")).json() == []
+    # …but does show in trends.
+    trows = (await client.get("/api/analytics/trends?days=7")).json()
+    assert len(trows) == 1 and trows[0]["source"] == "review" and trows[0]["total"] == 1
