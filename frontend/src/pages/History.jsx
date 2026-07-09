@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getHistory, getHistoryByType } from '../services/history.service'
-import { getMastery } from '../services/analytics.service'
+import { getMastery, getChatContext } from '../services/analytics.service'
 import { typeIcon, subjectLabel } from '../lib/curriculum'
 import { loadGeneration, routeForType } from '../lib/genStorage'
 import { getLevelInfo, getStreak, getStats, getAchievements } from '../lib/gamification'
@@ -29,8 +29,13 @@ export default function History() {
   const navigate = useNavigate()
 
   // Server-side per-unit mastery (weakest first) — the weak-area view localStorage can't give.
+  // Chat context is a secondary signal: it only annotates subjects mastery already flagged.
+  const [chatCtx, setChatCtx] = useState({})
   useEffect(() => {
     getMastery().then(setMastery).catch(() => {})
+    getChatContext(7)
+      .then(rows => setChatCtx(Object.fromEntries(rows.map(r => [r.subject, r]))))
+      .catch(() => {})
   }, [])
 
   // localStorage reads are idempotent — safe as lazy initializers under StrictMode
@@ -153,11 +158,19 @@ export default function History() {
                   .filter(Boolean).join(' · ')
                 const go = () => navigate(
                   `/mcq?subject=${m.subject}${m.grade ? `&grade=${m.grade}` : ''}${m.unit ? `&unit=${encodeURIComponent(m.unit)}` : ''}`)
+                const chat = chatCtx[m.subject]
                 return (
                   <li key={`${m.subject}-${m.grade}-${m.unit}`} className="weak-row" role="button" tabIndex={0}
                       onClick={go}
                       onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), go())}>
-                    <span>{loc || subjectLabel(m.subject)}</span>
+                    <span>
+                      {loc || subjectLabel(m.subject)}
+                      {chat && (
+                        <span className="weak-chat" title={chat.concepts.length ? `Asked about: ${chat.concepts.join(', ')}` : undefined}>
+                          · asked tutor ×{chat.count} this week
+                        </span>
+                      )}
+                    </span>
                     <span className="weak-count">{m.accuracy}% · {m.correct}/{m.total}</span>
                   </li>
                 )

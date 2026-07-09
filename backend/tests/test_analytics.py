@@ -112,3 +112,20 @@ async def test_evaluate_logs_review_attempt(client, db_session, test_user):
     # …but does show in trends.
     trows = (await client.get("/api/analytics/trends?days=7")).json()
     assert len(trows) == 1 and trows[0]["source"] == "review" and trows[0]["total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_chat_activity_rollup(client, db_session, test_user):
+    """Chat distillate: upserts accumulate per (user, day, subject), concepts
+    merge and dedupe, and the endpoint aggregates across days."""
+    await crud.record_chat_activity(db_session, test_user.id, "physics", 12, ["Newton's laws", "Momentum"])
+    await crud.record_chat_activity(db_session, test_user.id, "physics", 12, ["Momentum", "Friction"])
+    await crud.record_chat_activity(db_session, test_user.id, "maths", 12, [])
+    await db_session.commit()
+
+    rows = (await client.get("/api/analytics/chat-context?days=7")).json()
+    by = {r["subject"]: r for r in rows}
+    assert by["physics"]["count"] == 2
+    assert by["physics"]["concepts"] == ["Newton's laws", "Momentum", "Friction"]  # merged, deduped
+    assert by["maths"]["count"] == 1 and by["maths"]["concepts"] == []
+    assert rows[0]["subject"] == "physics"  # most-asked first

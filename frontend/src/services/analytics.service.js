@@ -21,3 +21,9 @@ export function getTrends(days = 30, subject) {
 export function getRetention() {
   return api.get('/analytics/retention')
 }
+
+// Tutor-chat volume per subject — secondary signal, only shown as context on
+// weak areas the accuracy data already flagged.
+export function getChatContext(days = 7) {
+  return api.get(`/analytics/chat-context?days=${days}`)
+}

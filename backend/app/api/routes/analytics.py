@@ -56,6 +56,12 @@ class RetentionRow(BaseModel):
     strong: int  # cards in Leitner box 3+
 
 
+class ChatContextRow(BaseModel):
+    subject: str
+    count: int
+    concepts: list[str]
+
+
 @router.post("/attempts", status_code=204)
 @limiter.limit("2000/day")
 @limiter.limit("120/minute")
@@ -94,3 +100,13 @@ async def retention(
     db: AsyncSession = Depends(get_db),
 ) -> list[RetentionRow]:
     return [RetentionRow(**r) for r in await crud.get_retention(db, current_user.id)]
+
+
+@router.get("/chat-context", response_model=list[ChatContextRow])
+async def chat_context(
+    days: int = Query(default=7, ge=1, le=90),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[ChatContextRow]:
+    """Tutor-chat volume per subject — secondary signal for annotating weak areas."""
+    return [ChatContextRow(**r) for r in await crud.get_chat_context(db, current_user.id, days=days)]

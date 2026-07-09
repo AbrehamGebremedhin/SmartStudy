@@ -6,9 +6,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.db.models import (Bookmark, ChatMessage, ChatSession, ExamQuestion, FlashcardReview, Generation,
-                           Mistake, QuestionAttempt, SecurityEvent, User, UserGeneration,
-                           UserProgress)
+from app.db.models import (Bookmark, ChatActivity, ChatMessage, ChatSession, ExamQuestion, FlashcardReview,
+                           Generation, Mistake, QuestionAttempt, SecurityEvent, User,
+                           UserGeneration, UserProgress)
 from app.services import srs
 
 
@@ -502,6 +502,59 @@ async def get_trends(
         {"date": d.strftime("%Y-%m-%d"), "source": src, "total": t, "correct": int(c or 0)}
         for d, src, t, c in result.all()
     ]
+
+
+async def record_chat_activity(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    subject: str,
+    grade: int | None,
+    concepts: list,
+) -> None:
+    """Distill one answered tutor question into the durable day rollup.
+
+    Runs inside the caller's transaction (no commit here). Race-safe: a single
+    upsert, so two concurrent messages can't collide on the (user, day, subject)
+    key the way read-then-insert would.
+    """
+    # Ethiopia is UTC+3 year-round (no DST), matching get_trends' bucketing.
+    day = (datetime.now(timezone.utc) + timedelta(hours=3)).date()
+    clean = [str(c)[:100] for c in concepts if c][:10]
+    stmt = pg_insert(ChatActivity).values(
+        user_id=user_id, day=day, subject=subject, grade=grade, count=1, concepts=clean,
+    )
+    await db.execute(stmt.on_conflict_do_update(
+        index_elements=["user_id", "day", "subject"],
+        set_={
+            "count": ChatActivity.count + 1,
+            # jsonb || jsonb concatenates arrays; deduped/capped at read time.
+            "concepts": ChatActivity.concepts.op("||")(stmt.excluded.concepts),
+            "grade": stmt.excluded.grade,
+        },
+    ))
+
+
+async def get_chat_context(db: AsyncSession, user_id: uuid.UUID, days: int = 7) -> list[dict]:
+    """Per-subject tutor-chat volume + concepts asked about, last N days.
+
+    Secondary analytics signal: shown only alongside accuracy-flagged weak
+    areas, never as a struggle measure on its own.
+    """
+    since = ((datetime.now(timezone.utc) + timedelta(hours=3)) - timedelta(days=days)).date()
+    result = await db.execute(
+        select(ChatActivity.subject, func.sum(ChatActivity.count), func.jsonb_agg(ChatActivity.concepts))
+        .where(ChatActivity.user_id == user_id, ChatActivity.day >= since)
+        .group_by(ChatActivity.subject)
+    )
+    out = []
+    for subject, count, concept_lists in result.all():
+        seen: dict[str, None] = {}  # ordered dedupe, most-recent-day lists last
+        for lst in (concept_lists or []):
+            for c in (lst or []):
+                seen.setdefault(c, None)
+        out.append({"subject": subject, "count": int(count or 0), "concepts": list(seen)[:6]})
+    out.sort(key=lambda r: -r["count"])
+    return out
 
 
 async def get_retention(db: AsyncSession, user_id: uuid.UUID) -> list[dict]:

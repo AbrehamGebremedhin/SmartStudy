@@ -2,7 +2,9 @@ import uuid
 from datetime import datetime
 from enum import Enum
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, Numeric, String, Text
+from datetime import date
+
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -303,6 +305,29 @@ class Bookmark(Base):
     question: Mapped[dict] = mapped_column(JSONB, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ChatActivity(Base):
+    """Durable per-(user, day, subject) distillate of tutor chats.
+
+    Chat sessions expire after 24h, so anything analytics wants must be captured
+    at message time — this row survives the purge. Secondary signal only: it
+    corroborates weak areas the accuracy data already flagged, never flags
+    struggle by itself (raw chat volume can't separate confusion from curiosity).
+    """
+
+    __tablename__ = "chat_activity"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), primary_key=True)
+    # Africa/Addis_Ababa calendar day (Ethiopia is UTC+3 year-round, no DST) —
+    # same bucketing as get_trends so the two never disagree on "today".
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    subject: Mapped[str] = mapped_column(String, primary_key=True)
+
+    grade: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # key_concepts from the assistant's replies, concatenated; deduped/capped at read.
+    concepts: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
 
 
 class ChatSession(Base):

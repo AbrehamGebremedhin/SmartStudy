@@ -224,6 +224,13 @@ async def send_message(
         key_concepts=key_concepts,
     )
 
+    # Distill into the durable analytics rollup — sessions expire in 24h, this
+    # is the only record of the chat that survives. Same transaction as the
+    # message itself, so the reply and its analytics row live or die together.
+    await crud.record_chat_activity(
+        db, current_user.id, subject=session.subject, grade=session.grade, concepts=key_concepts,
+    )
+
     suggested_title: str | None = result.get("title")
     if suggested_title and suggested_title != session.title and session.title == "New Chat":
         await crud.update_chat_session_title(db, session_id, current_user.id, suggested_title)

@@ -3081,3 +3081,6 @@ select:focus, input:focus { border-color: var(--ochre); box-shadow: 0 0 0 3px rg
   white-space: nowrap;
   border: 0;
 }
+
+/* Secondary chat-context annotation on weak-area rows */
+.weak-chat { color: var(--ink-3); font-weight: 400; font-size: 11px; margin-left: 4px; }
