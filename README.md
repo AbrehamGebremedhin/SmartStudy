@@ -11,9 +11,15 @@ An AI-powered study companion built for Ethiopian high school students (grades 9
 - **Study Notes** — AI-generated comprehensive notes with worked examples
 - **AI Tutor Chat** — Real-time conversation for concept clarification (WebSocket streaming)
 - **Answer Evaluation** — Submit written answers and receive LLM-graded feedback
+- **Mock Exams** — Practice with real past EUEE questions, served by subject and year
+- **Mistake Bank** — Wrong answers are re-served until mastered, with a live count badge
+- **Bookmarks** — Save questions to revisit later
+- **Progress Analytics** — Attempt logging, per-unit mastery, daily trends, and retention charts; tutor chats are distilled into durable analytics context
 - **Content Caching** — Identical requests return cached results instantly (no wasted tokens)
 - **Gamification** — XP, levels, streaks, and achievements using eight Ethiopian academic ranks (Temari → Liqe Liqawnt)
 - **Curriculum Validation** — Enforces Ethiopian curriculum scope (specific subjects, grades, and units)
+- **PWA** — Installable with an offline app shell
+- **Dark Mode** — Full light/dark theming
 
 ---
 
@@ -38,7 +44,7 @@ An AI-powered study companion built for Ethiopian high school students (grades 9
 SmartStudy/
 ├── frontend/               # React + Vite SPA
 │   ├── src/
-│   │   ├── pages/          # MCQ, Flashcards, Notes, Chat, History, Home
+│   │   ├── pages/          # MCQ, Flashcards, Notes, Chat, MockExam, Review, History, Home
 │   │   ├── components/     # Sidebar, GamifyLayer, ActivityHeatmap, etc.
 │   │   ├── services/       # API client wrappers per feature
 │   │   ├── hooks/          # useGenerationWS (WebSocket streaming)
@@ -54,7 +60,7 @@ SmartStudy/
     │   ├── security/       # Rate limiting, input/output sanitization, audit log
     │   ├── core/           # Curriculum validation, custom exceptions
     │   ├── schemas/        # Pydantic request/response models
-    │   ├── routers/        # FastAPI route handlers
+    │   ├── api/routes/     # FastAPI route handlers
     │   └── config.py       # Validated settings (pydantic-settings)
     ├── tests/              # Unit, integration, and E2E tests
     └── pyproject.toml
@@ -140,6 +146,11 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
 | `POST` | `/chat/sessions` | Create chat session |
 | `GET/POST` | `/chat/sessions/{id}` | Get session or add message |
 | `GET` | `/history/{type}` | Fetch generation history |
+| `GET` | `/exam/practice` | Practice past EUEE exam questions |
+| `GET/POST` | `/mistakes` | List / log mistakes (`/resolve` to clear, `/count` for badge) |
+| `GET/POST` | `/bookmarks` | Saved questions (`/remove` to unsave) |
+| `POST` | `/analytics/attempts` | Log a question attempt |
+| `GET` | `/analytics/{mastery,trends,retention}` | Per-unit mastery, daily trends, retention |
 | `WS` | `/ws/generate/{type}` | Streaming generation progress |
 | `GET` | `/health` | Health check |
 
