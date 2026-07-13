@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import NotFound from './pages/NotFound'
 import { AuthProvider, useAuth } from './context/AuthContext'
@@ -9,13 +9,14 @@ import BottomNav from './components/layout/BottomNav'
 import GamifyLayer from './components/ui/GamifyLayer'
 import Login from './pages/Login'
 import Home from './pages/Home'
-import MCQ from './pages/MCQ'
-import MockExam from './pages/MockExam'
-import Flashcards from './pages/Flashcards'
-import Notes from './pages/Notes'
-import Chat from './pages/Chat'
-import History from './pages/History'
-import Review from './pages/Review'
+
+const MCQ = lazy(() => import('./pages/MCQ'))
+const MockExam = lazy(() => import('./pages/MockExam'))
+const Flashcards = lazy(() => import('./pages/Flashcards'))
+const Notes = lazy(() => import('./pages/Notes'))
+const Chat = lazy(() => import('./pages/Chat'))
+const History = lazy(() => import('./pages/History'))
+const Review = lazy(() => import('./pages/Review'))
 
 function AppShell() {
   return (
@@ -23,18 +24,20 @@ function AppShell() {
       <Sidebar />
       <MobileHeader />
       <div className="main">
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/mcq" element={<MCQ />} />
-          <Route path="/mock-exam" element={<MockExam />} />
-          <Route path="/flashcards" element={<Flashcards />} />
-          <Route path="/review" element={<Review />} />
-          <Route path="/notes" element={<Notes />} />
-          <Route path="/chat" element={<Chat />} />
-          <Route path="/chat/:sessionId" element={<Chat />} />
-          <Route path="/history" element={<History />} />
-          <Route path="*" element={<NotFound />} />
-        </Routes>
+        <Suspense fallback={null}>
+          <Routes>
+            <Route path="/" element={<Home />} />
+            <Route path="/mcq" element={<MCQ />} />
+            <Route path="/mock-exam" element={<MockExam />} />
+            <Route path="/flashcards" element={<Flashcards />} />
+            <Route path="/review" element={<Review />} />
+            <Route path="/notes" element={<Notes />} />
+            <Route path="/chat" element={<Chat />} />
+            <Route path="/chat/:sessionId" element={<Chat />} />
+            <Route path="/history" element={<History />} />
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </Suspense>
       </div>
       <GamifyLayer />
       <BottomNav />
