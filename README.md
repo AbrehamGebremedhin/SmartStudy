@@ -2,6 +2,8 @@
 
 An AI-powered study companion built for Ethiopian high school students (grades 9–12) and EUEE exam preparation. SmartStudy generates curriculum-aligned MCQs, flashcards, and study notes, provides a real-time AI tutor chat, and motivates learners through a gamification system rooted in Ethiopian academic tradition.
 
+System documentation: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+
 ---
 
 ## Features
