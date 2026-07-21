@@ -44,8 +44,17 @@ def format_docs(context) -> str:
     return str(context)
 
 
+_retry_logger = logging.getLogger(__name__)
+
+
 def retry_on_none(max_retries=3):
-    """Retry a function up to max_retries times if it returns None, with exponential back-off."""
+    """Retry a function up to max_retries times if it returns None, with exponential back-off.
+
+    A None return means the whole generation pipeline produced nothing usable (e.g. every
+    parallel chunk failed to parse or was emptied by validation). Each retry re-runs the
+    entire pipeline plus a back-off sleep, so retries are a major hidden latency source —
+    logged at WARNING so they show up in latency attribution.
+    """
     def decorator_retry(func):
         if asyncio.iscoroutinefunction(func):
             @functools.wraps(func)
@@ -55,7 +64,10 @@ def retry_on_none(max_retries=3):
                     if result is not None:
                         return result
                     if attempt < max_retries - 1:
+                        _retry_logger.warning("[retry] %s returned None (attempt %d/%d) — retrying",
+                                              func.__name__, attempt + 1, max_retries)
                         await asyncio.sleep(2 ** attempt)
+                _retry_logger.error("[retry] %s exhausted %d attempts", func.__name__, max_retries)
                 raise ValueError(f"Failed to get a valid response after {max_retries} attempts")
             return async_wrapper
         else:
@@ -66,7 +78,10 @@ def retry_on_none(max_retries=3):
                     if result is not None:
                         return result
                     if attempt < max_retries - 1:
+                        _retry_logger.warning("[retry] %s returned None (attempt %d/%d) — retrying",
+                                              func.__name__, attempt + 1, max_retries)
                         time.sleep(2 ** attempt)
+                _retry_logger.error("[retry] %s exhausted %d attempts", func.__name__, max_retries)
                 raise ValueError(f"Failed to get a valid response after {max_retries} attempts")
             return wrapper
     return decorator_retry
