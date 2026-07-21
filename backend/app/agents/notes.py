@@ -26,16 +26,19 @@ class NotesMixin:
         token_usage = TokenCount(0, 0, 0.0)
         try:
             _t_total = time.perf_counter()
+            coverage_task = None
             if chat_context:
                 context_response = SimpleNamespace(
                     error=None,
                     context=[chat_context],
                     parsed_answer={"key_concepts": [], "areas": [], "keypoints": []},
                 )
-                coverage = {"is_covered": True}
             else:
-                # Milvus-only retrieval: topic coverage is checked in one LLM call below,
-                # replacing the old two-step query_db(notes) + validate_topic_coverage flow.
+                # Milvus-only retrieval, then the topic-coverage check runs CONCURRENTLY
+                # with generation below rather than gating it. On the common covered case
+                # its round-trip folds under the generation tail (saves ~5-10s); on the rare
+                # not-covered case the generation output is discarded. Coverage judging only
+                # needs a sample of the context, so cap it to keep that call's prefill small.
                 _t0 = time.perf_counter()
                 context_response = await self.context_agent.query_documents_only(
                     subject=subject,
@@ -45,34 +48,15 @@ class NotesMixin:
                 self.logger.info("[notes] retrieval: %.2fs", time.perf_counter() - _t0)
                 if context_response.error:
                     return {"error": context_response.error}
-                _t0 = time.perf_counter()
-                coverage = await self.validation_agent.validate_coverage_from_context(
-                    topic=topic,
-                    context=context_response.context,
-                    subject=subject,
-                    grade=grade,
-                    unit=unit,
+                coverage_task = asyncio.create_task(
+                    self.validation_agent.validate_coverage_from_context(
+                        topic=topic,
+                        context=context_response.context[:15],
+                        subject=subject,
+                        grade=grade,
+                        unit=unit,
+                    )
                 )
-                self.logger.info("[notes] coverage-check: %.2fs", time.perf_counter() - _t0)
-
-            if not coverage.get("is_covered", True):
-                available = coverage.get("available_topics", [])
-                suffix = (
-                    f" Topics available in this unit: {', '.join(available)}."
-                    if available else ""
-                )
-                scope = f"{subject.title()}"
-                if grade:
-                    scope += f" Grade {grade}"
-                if unit:
-                    scope += f" Unit {unit}"
-                return {
-                    "error": "topic_not_in_unit",
-                    "message": (
-                        f"'{topic}' is not covered in the {scope} curriculum.{suffix}"
-                    ),
-                    "available_topics": available,
-                }
 
             subject_rules = get_subject_rules(subject)
             subject_focus = get_subject_focus(subject) or "- No additional subject focus."
@@ -100,11 +84,40 @@ class NotesMixin:
                 "presentation_rules": pres_rules,
             }
             # Core (conceptual) and applied (practical) run in parallel — disjoint output keys.
+            # Kicked off before we resolve coverage so the two overlap.
             _t0 = time.perf_counter()
-            response_core, response_applied = await asyncio.gather(
+            gen_task = asyncio.gather(
                 (prompt_core | self._json_llm | StrOutputParser()).ainvoke(_invoke_args),
                 (prompt_applied | self._json_llm | StrOutputParser()).ainvoke(_invoke_args),
             )
+
+            if coverage_task is not None:
+                coverage = await coverage_task
+                if not coverage.get("is_covered", True):
+                    gen_task.cancel()
+                    try:
+                        await gen_task  # retrieve the cancellation so it isn't logged as unhandled
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                    available = coverage.get("available_topics", [])
+                    suffix = (
+                        f" Topics available in this unit: {', '.join(available)}."
+                        if available else ""
+                    )
+                    scope = f"{subject.title()}"
+                    if grade:
+                        scope += f" Grade {grade}"
+                    if unit:
+                        scope += f" Unit {unit}"
+                    return {
+                        "error": "topic_not_in_unit",
+                        "message": (
+                            f"'{topic}' is not covered in the {scope} curriculum.{suffix}"
+                        ),
+                        "available_topics": available,
+                    }
+
+            response_core, response_applied = await gen_task
             self.logger.info("[notes] generation (core+applied parallel): %.2fs", time.perf_counter() - _t0)
             parsed_core = parse_llm_response(str(response_core), self.logger)
             parsed_applied = parse_llm_response(str(response_applied), self.logger)

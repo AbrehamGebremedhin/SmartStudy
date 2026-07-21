@@ -13,7 +13,7 @@ from ContextRefinementAgent import ContextRefinementAgent
 from ValidationAgent import ValidationAgent
 from models import ChatSession, TokenCount
 from session_manager import SessionManager
-from utils import TokenAccountant
+from utils import TokenAccountant, TruncationLogger
 
 load_dotenv("./.env")
 
@@ -33,8 +33,16 @@ class GenerationBase:
         # the strict JSON-schema + uniqueness rules in prompts.py, high enough to keep
         # question/flashcard wording varied across a set (unlike enrich_questions.py's
         # temp=0, which is tuned for single-answer factual accuracy, not varied generation).
-        self.llm = ChatDeepSeek(model="deepseek-v4-flash", api_key=api_key, temperature=0.3)
-        self._json_llm = self.llm.bind(response_format={"type": "json_object"})
+        # DEEPSEEK_MAX_TOKENS raises the output cap above the API default when set — set it
+        # only to a value the model actually supports (unset = provider default, no risk of
+        # a too-low cap truncating valid JSON). TruncationLogger reports if any call is cut off.
+        _mt = os.getenv("DEEPSEEK_MAX_TOKENS")
+        max_tokens = int(_mt) if _mt else None
+        self.llm = ChatDeepSeek(model="deepseek-v4-flash", api_key=api_key,
+                                temperature=0.3, max_tokens=max_tokens)
+        self._json_llm = self.llm.bind(
+            response_format={"type": "json_object"}
+        ).with_config(callbacks=[TruncationLogger(self.logger)])
         self.context_agent = ContextRefinementAgent()
         self.validation_agent = ValidationAgent()
         self.sessions = SessionManager()

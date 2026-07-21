@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 # Tuning. MAX_WORKERS stays well under the DB pool (15 + 15 overflow) so claims
 # and the WS result-polls never starve each other for connections.
-MIN_WORKERS = 1
+MIN_WORKERS = 2
 MAX_WORKERS = 8
 POLL_IDLE_SECONDS = 1.0       # worker sleep when no job is ready
 SUPERVISOR_INTERVAL = 3.0     # how often we re-check the backlog
@@ -48,6 +48,12 @@ HANDLERS: dict[str, Handler] = {}
 # fires — submit_and_wait still re-checks the DB on a slow fallback interval.
 # ponytail: in-process events, LISTEN/NOTIFY only if you actually run multi-instance
 _waiters: dict[uuid.UUID, asyncio.Event] = {}
+
+# Signals idle workers that a job was just submitted so they claim it immediately instead
+# of waiting out the poll interval — the difference between ~1s and instant pickup on the
+# WS generation path. Coarse (one event for the whole pool); the per-worker poll timeout
+# remains as a fallback for multi-instance submits (another process never sets our event).
+_new_job: asyncio.Event = asyncio.Event()
 
 
 def _wake(job_id: uuid.UUID) -> None:
@@ -75,6 +81,7 @@ async def submit(job_type: str, payload: dict, max_attempts: int = 3) -> uuid.UU
         job = Job(type=job_type, payload=payload, max_attempts=max_attempts)
         db.add(job)
         await db.commit()
+        _new_job.set()  # wake an idle worker immediately (same-process)
         return job.id
 
 
@@ -212,9 +219,15 @@ async def _worker(slot: int) -> None:
     # in-flight generation is never interrupted by a scale-down.
     try:
         while _running and slot < _desired:
+            # Clear before claiming so any submit that races the claim still leaves the
+            # event set, and our wait() below returns immediately — no lost wakeups.
+            _new_job.clear()
             claim = await _claim_one()
             if claim is None:
-                await asyncio.sleep(POLL_IDLE_SECONDS)
+                try:
+                    await asyncio.wait_for(_new_job.wait(), timeout=POLL_IDLE_SECONDS)
+                except asyncio.TimeoutError:
+                    pass  # fallback tick (covers multi-instance submits) — re-claim
                 continue
             await _process(claim)
     finally:

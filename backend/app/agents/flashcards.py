@@ -84,8 +84,10 @@ class FlashcardMixin:
             ])
 
             chain = prompt | self._json_llm | StrOutputParser()
-            # Over-generate by a small buffer so the top-up loop is rarely needed.
-            generate_count = num_cards + max(2, num_cards // 4)
+            # Over-generate by a small buffer so the sequential top-up call is rarely needed.
+            # ponytail: floor=3 is a conservative default — tune from the Phase-0 top-up logs
+            # ([flashcard] top-up ...) once real-traffic data exists.
+            generate_count = num_cards + max(3, num_cards // 4)
             base_args = {
                 "num_cards": generate_count,
                 "difficulty": difficulty,

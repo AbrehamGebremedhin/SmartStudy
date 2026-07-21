@@ -79,6 +79,10 @@ async def generate_notes(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat session not found.")
         chat_context = _format_chat_context(chat_session.messages)
 
+    # Release the DB connection during the ~30-50s generation so it isn't pinned
+    # idle-in-transaction (which would cap concurrent generations at the pool size).
+    # The cache check + chat-context read above are read-only; the save re-acquires a conn.
+    await db.commit()
     result = await run_generate_notes(
         subject=body.subject,
         topic=body.topic,

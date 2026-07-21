@@ -115,6 +115,9 @@ async def ws_generate_notes(
             chat_context = _format_chat_context(chat_session.messages)
 
         await websocket.send_json(_prog("generating", 3, TOTAL, "Writing your study notes…"))
+        # Release the DB connection while the job runs — it isn't needed until the save
+        # below, and holding it idle would pin a pool slot for the whole generation.
+        await db.commit()
         result = await jobs.submit_and_wait("generate_notes", {
             "subject": body.subject,
             "topic": body.topic,
@@ -243,6 +246,8 @@ async def ws_generate_mcq(
 
             n = body.num_questions
             await websocket.send_json(_prog("generating", 3, TOTAL, f"Crafting {n} question{'s' if n != 1 else ''}…"))
+            # Release the DB connection while the job runs (re-acquired for the save below).
+            await db.commit()
             result = await jobs.submit_and_wait("generate_mcq", {
                 "subject": body.subject, "grade": body.grade, "unit": body.unit, "topic": body.topic,
                 "num_questions": body.num_questions, "difficulty": body.difficulty,
@@ -303,6 +308,8 @@ async def ws_generate_mcq(
         await websocket.send_json(_prog("loading_context", 2, TOTAL, "Preparing generation…"))
         n = fresh_count
         await websocket.send_json(_prog("generating", 3, TOTAL, f"Crafting {n} new question{'s' if n != 1 else ''}…"))
+        # Release the DB connection while the job runs (re-acquired for the save below).
+        await db.commit()
         result = await jobs.submit_and_wait("generate_mcq", {
             "subject": body.subject, "grade": body.grade, "unit": body.unit, "topic": body.topic,
             "num_questions": fresh_count, "difficulty": body.difficulty,
@@ -426,6 +433,8 @@ async def ws_generate_flashcards(
 
             n = body.num_cards
             await websocket.send_json(_prog("generating", 3, TOTAL, f"Creating {n} flashcard{'s' if n != 1 else ''}…"))
+            # Release the DB connection while the job runs (re-acquired for the save below).
+            await db.commit()
             result = await jobs.submit_and_wait("generate_flashcards", {
                 "subject": body.subject, "grade": body.grade, "unit": body.unit, "topic": body.topic,
                 "num_cards": body.num_cards, "difficulty": body.difficulty,
@@ -486,6 +495,8 @@ async def ws_generate_flashcards(
         await websocket.send_json(_prog("loading_context", 2, TOTAL, "Preparing generation…"))
         n = fresh_count
         await websocket.send_json(_prog("generating", 3, TOTAL, f"Creating {n} new flashcard{'s' if n != 1 else ''}…"))
+        # Release the DB connection while the job runs (re-acquired for the save below).
+        await db.commit()
         result = await jobs.submit_and_wait("generate_flashcards", {
             "subject": body.subject, "grade": body.grade, "unit": body.unit, "topic": body.topic,
             "num_cards": fresh_count, "difficulty": body.difficulty,

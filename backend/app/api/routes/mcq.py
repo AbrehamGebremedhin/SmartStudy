@@ -86,6 +86,10 @@ async def generate_mcqs(
             if not chat_session:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat session not found.")
             chat_context = _format_chat_context(chat_session.messages)
+        # Release the DB connection during the ~30-60s generation so it isn't pinned
+        # idle-in-transaction (which would cap concurrent generations at the pool size).
+        # The pre-reads above are read-only; the save below re-acquires a connection.
+        await db.commit()
         result = await run_generate_mcqs(
             subject=body.subject, grade=body.grade, unit=body.unit, topic=body.topic,
             num_questions=body.num_questions, difficulty=body.difficulty,
@@ -134,6 +138,8 @@ async def generate_mcqs(
     reuse_count = min(max_reuse, len(unique_pool))
     fresh_count = body.num_questions - reuse_count
 
+    # Release the pooled DB connection during generation (read-only pool query is done).
+    await db.commit()
     result = await run_generate_mcqs(
         subject=body.subject, grade=body.grade, unit=body.unit, topic=body.topic,
         num_questions=fresh_count, difficulty=body.difficulty,

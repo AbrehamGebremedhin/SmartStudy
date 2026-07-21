@@ -142,6 +142,9 @@ async def generate_flashcards(
             if not chat_session:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat session not found.")
             chat_context = _format_chat_context(chat_session.messages)
+        # Release the DB connection during generation so it isn't pinned idle-in-transaction
+        # (which would cap concurrent generations at the pool size). Pre-reads are read-only.
+        await db.commit()
         result = await run_generate_flashcards(
             subject=body.subject, grade=body.grade, unit=body.unit, topic=body.topic,
             num_cards=body.num_cards, difficulty=body.difficulty,
@@ -190,6 +193,8 @@ async def generate_flashcards(
     reuse_count = min(max_reuse, len(unique_pool))
     fresh_count = body.num_cards - reuse_count
 
+    # Release the pooled DB connection during generation (read-only pool query is done).
+    await db.commit()
     result = await run_generate_flashcards(
         subject=body.subject, grade=body.grade, unit=body.unit, topic=body.topic,
         num_cards=fresh_count, difficulty=body.difficulty,

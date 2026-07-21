@@ -6,9 +6,39 @@ import time
 from typing import Any, Dict
 
 import tiktoken
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.documents import Document
 
 from models import TokenCount
+
+
+class TruncationLogger(BaseCallbackHandler):
+    """Warn when an LLM response is cut off at the output cap (finish_reason == 'length').
+
+    A truncated response is partial/invalid JSON: it empties a generation chunk and can
+    trigger a full-pipeline retry_on_none, so a truncation warning explains otherwise-
+    mysterious latency spikes. Detection only — the fix (if it fires) is raising the
+    model's output cap via DEEPSEEK_MAX_TOKENS, not lowering it.
+    """
+
+    def __init__(self, logger: logging.Logger):
+        self._logger = logger
+
+    def on_llm_end(self, response, **kwargs) -> None:
+        try:
+            for gen_list in response.generations:
+                for gen in gen_list:
+                    info = getattr(gen, "generation_info", None) or {}
+                    finish = info.get("finish_reason")
+                    if finish is None:
+                        msg = getattr(gen, "message", None)
+                        finish = (getattr(msg, "response_metadata", {}) or {}).get("finish_reason")
+                    if finish == "length":
+                        self._logger.warning(
+                            "[truncation] LLM output hit the token cap (finish_reason=length) "
+                            "— response is likely truncated JSON; raise DEEPSEEK_MAX_TOKENS")
+        except Exception:  # observability must never break a generation
+            pass
 
 
 class TokenAccountant:
