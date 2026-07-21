@@ -14,7 +14,7 @@ from models import TokenCount
 from prompts import _FLASHCARD_HUMAN, _FLASHCARD_SYSTEM
 from subject_rules import (get_grounding_rule, get_subject_focus, get_subject_rules,
                            presentation_rules)
-from utils import format_docs, parse_llm_response, retry_on_none
+from utils import format_docs, gen_semaphore, parse_llm_response, retry_on_none
 
 
 class FlashcardMixin:
@@ -99,18 +99,20 @@ class FlashcardMixin:
 
             # Parallel generation across disjoint context slices (see generate_mcqs) — decode
             # is sequential, so K smaller calls finish in ~1/K the wall time at the same
-            # per-card quality. Validation stays fire-and-forget below.
+            # per-card quality. K up to 6; the global gen_semaphore bounds cross-request
+            # DeepSeek concurrency. Validation stays fire-and-forget below.
             docs = context_response.context if isinstance(context_response.context, list) \
                 else [context_response.context]
-            K = max(1, min(num_cards, 3, len(docs)))
+            K = max(1, min(num_cards, 6, len(docs)))
             per_call = (generate_count + K - 1) // K
             slices = [docs[i::K] for i in range(K)] if K > 1 else [docs]
 
             async def _gen_cards(doc_slice):
                 if not doc_slice:
                     return []
-                resp = await chain.ainvoke({**base_args, "num_cards": per_call,
-                                            "context": format_docs(doc_slice)})
+                async with gen_semaphore():
+                    resp = await chain.ainvoke({**base_args, "num_cards": per_call,
+                                                "context": format_docs(doc_slice)})
                 parsed = parse_llm_response(str(resp), self.logger)
                 return parsed.get("flashcards", [])
 
@@ -151,8 +153,9 @@ class FlashcardMixin:
             shortfall = num_cards - len(valid_cards)
             if shortfall > 0:
                 _t0 = time.perf_counter()
-                topup_response = await chain.ainvoke({**base_args, "num_cards": shortfall + 2,
-                                                      "context": format_docs(docs[:12])})
+                async with gen_semaphore():
+                    topup_response = await chain.ainvoke({**base_args, "num_cards": shortfall + 2,
+                                                          "context": format_docs(docs[:12])})
                 topup_parsed = parse_llm_response(str(topup_response), self.logger)
                 topup_cards = [
                     c for c in topup_parsed.get("flashcards", [])

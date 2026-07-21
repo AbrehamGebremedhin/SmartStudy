@@ -2,6 +2,7 @@ import asyncio
 import functools
 import json
 import logging
+import os
 import time
 from typing import Any, Dict
 
@@ -10,6 +11,26 @@ from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.documents import Document
 
 from models import TokenCount
+
+# Bounds total concurrent DeepSeek *generation* calls across all requests and their parallel
+# chunks. Raising per-request parallelism (K) shrinks per-call decode, but without a ceiling a
+# few concurrent requests could fan out into dozens of simultaneous API calls and get throttled.
+# Keep this >= the max K so a single request never self-serializes on its own chunks.
+GEN_CONCURRENCY = int(os.getenv("DEEPSEEK_GEN_CONCURRENCY", "12"))
+# Keyed by running loop: production has one persistent loop (one shared semaphore), while
+# per-test event loops each get their own — a single module-level Semaphore would bind to the
+# first loop and then raise "bound to a different loop" everywhere else.
+_gen_semaphores: "dict[object, asyncio.Semaphore]" = {}
+
+
+def gen_semaphore() -> asyncio.Semaphore:
+    """Return the generation-concurrency semaphore for the current event loop."""
+    loop = asyncio.get_running_loop()
+    sem = _gen_semaphores.get(loop)
+    if sem is None:
+        sem = asyncio.Semaphore(GEN_CONCURRENCY)
+        _gen_semaphores[loop] = sem
+    return sem
 
 
 class TruncationLogger(BaseCallbackHandler):

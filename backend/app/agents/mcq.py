@@ -12,7 +12,7 @@ from mcq_utils import is_test_prep_artifact, redistribute_answer_positions
 from models import TokenCount
 from prompts import _MCQ_HUMAN, _MCQ_SYSTEM
 from subject_rules import get_grounding_rule, get_mcq_subject_guidance, get_subject_rules
-from utils import format_docs, parse_llm_response, retry_on_none
+from utils import format_docs, gen_semaphore, parse_llm_response, retry_on_none
 
 
 class MCQMixin:
@@ -102,19 +102,21 @@ class MCQMixin:
             # topic diversity, no cross-call coordination needed) and validate each chunk
             # as it returns, so the validation round-trip folds under the generation tail
             # instead of adding to it. Same model, same prompt, same per-question quality.
-            # ponytail: K capped at 3 to bound DeepSeek concurrency (each request fans out
-            # to <=2K+1 calls). Add a global semaphore if DeepSeek starts throttling.
+            # K up to 6 shrinks per-call decode further; the global gen_semaphore bounds the
+            # resulting cross-request DeepSeek concurrency (kept >= K so one request never
+            # self-serializes).
             docs = context_response.context if isinstance(context_response.context, list) \
                 else [context_response.context]
-            K = max(1, min(num_questions, 3, len(docs)))
+            K = max(1, min(num_questions, 6, len(docs)))
             per_call = (generate_count + K - 1) // K
             slices = [docs[i::K] for i in range(K)] if K > 1 else [docs]
 
             async def _gen_and_validate(doc_slice):
                 if not doc_slice:
                     return []
-                resp = await chain.ainvoke({**base_args, "num_questions": per_call,
-                                            "context": format_docs(doc_slice)})
+                async with gen_semaphore():
+                    resp = await chain.ainvoke({**base_args, "num_questions": per_call,
+                                                "context": format_docs(doc_slice)})
                 parsed = parse_llm_response(str(resp), self.logger)
                 qs = parsed.get("questions", [])
                 if not qs:
@@ -163,8 +165,9 @@ class MCQMixin:
             shortfall = num_questions - len(valid_questions)
             if shortfall > 0:
                 _t0 = time.perf_counter()
-                topup_response = await chain.ainvoke({**base_args, "num_questions": shortfall + 2,
-                                                      "context": format_docs(docs[:12])})
+                async with gen_semaphore():
+                    topup_response = await chain.ainvoke({**base_args, "num_questions": shortfall + 2,
+                                                          "context": format_docs(docs[:12])})
                 topup_parsed = parse_llm_response(str(topup_response), self.logger)
                 topup_questions = [
                     q for q in topup_parsed.get("questions", [])

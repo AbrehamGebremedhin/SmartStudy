@@ -80,4 +80,4 @@ class TestNotesCoverageOverlap:
         assert "Nonexistent Topic" in result["message"]
         assert result["available_topics"] == ["Kinematics", "Forces"]
         assert gen_started.is_set()       # generation was actually kicked off (overlap)
-        assert len(gen_cancelled) == 2    # both parallel calls (core+applied) cancelled
+        assert len(gen_cancelled) == 3    # all parallel calls (core+applied+extra) cancelled
